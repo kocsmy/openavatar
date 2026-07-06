@@ -78,7 +78,9 @@ struct KeychainStore {
     }
 
     var hasAnyLLMKey: Bool {
-        get(.anthropicAPIKey) != nil || get(.openAIAPIKey) != nil || get(.geminiAPIKey) != nil
+        return self.get(.anthropicAPIKey) != nil
+            || self.get(.openAIAPIKey) != nil
+            || self.get(.geminiAPIKey) != nil
     }
 }
 
