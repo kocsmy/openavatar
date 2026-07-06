@@ -36,6 +36,8 @@ final class AppState: ObservableObject {
     @Published var showPostCallReview = false
     @Published var isPlanning = false
     @Published var suggestedCallApp: String?
+    @Published var proactiveSuggestions: [ProactiveSuggestion] = []
+    @Published var isConsolidating = false
 
     let settings = SettingsStore.shared
     let store = ContextStore.shared
@@ -48,6 +50,8 @@ final class AppState: ObservableObject {
     private(set) lazy var detector = DecisionDetector(router: router, store: store,
                                                       wakePhrase: settings.assistantName)
     private(set) lazy var trust = TrustPolicyEngine(store: store)
+    private(set) lazy var consolidator = MemoryConsolidator(router: router, store: store)
+    private(set) lazy var proactive = ProactiveEngine(router: router, store: store)
 
     private var capture: AudioCaptureService?
     private var currentCallID: UUID?
@@ -110,7 +114,34 @@ final class AppState: ObservableObject {
                 WindowManager.shared.showPostCallReview()
 #endif
             }
+            // Compounding memory: digest the call, update facts, then see if
+            // anything warrants a proactive nudge.
+            if let callID {
+                isConsolidating = true
+                defer { isConsolidating = false }
+                do {
+                    try await consolidator.consolidate(callID: callID)
+                    proactiveSuggestions = (try? await proactive.suggestions()) ?? proactiveSuggestions
+                } catch {
+                    // Memory is best-effort; never block the review flow on it.
+                    NSLog("Memory consolidation failed: %@", Redactor.redact(error.localizedDescription))
+                }
+            }
         }
+    }
+
+    // MARK: - Proactive suggestions (always Ask-first)
+
+    func accept(_ suggestion: ProactiveSuggestion) {
+        proactiveSuggestions.removeAll { $0.id == suggestion.id }
+        let decision = suggestion.asDecision()
+        try? store.insert(decision)
+        detectedDecisions.append(decision)
+        prepare(decision)
+    }
+
+    func dismissSuggestion(_ suggestion: ProactiveSuggestion) {
+        proactiveSuggestions.removeAll { $0.id == suggestion.id }
     }
 
     /// Global hotkey / menu-bar action (spec §5.1).

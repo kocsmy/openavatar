@@ -84,17 +84,44 @@ struct ToolCall: Codable, Identifiable, Sendable {
 
 // MARK: - Actions
 
-enum IntegrationID: String, Codable, CaseIterable, Identifiable, Sendable {
-    case github, slack, linear, email
+/// Open, string-backed integration identifier. The four built-ins are native
+/// Swift plugins; everything else arrives dynamically via JSON manifests or
+/// MCP servers (spec direction: hundreds/thousands of integrations without
+/// code changes), so this must not be a closed enum.
+struct IntegrationID: RawRepresentable, Codable, Hashable, Identifiable, Sendable {
+    let rawValue: String
+
+    init(rawValue: String) { self.rawValue = rawValue }
+    init(_ raw: String) { self.rawValue = raw }
+
     var id: String { rawValue }
 
+    static let github = IntegrationID("github")
+    static let slack = IntegrationID("slack")
+    static let linear = IntegrationID("linear")
+    static let email = IntegrationID("email")
+    static let builtin: [IntegrationID] = [.github, .slack, .linear, .email]
+
     var displayName: String {
-        switch self {
-        case .github: return "GitHub"
-        case .slack: return "Slack"
-        case .linear: return "Linear"
-        case .email: return "Email"
+        switch rawValue {
+        case "github": return "GitHub"
+        case "slack": return "Slack"
+        case "linear": return "Linear"
+        case "email": return "Email"
+        default:
+            return rawValue.split(whereSeparator: { $0 == "-" || $0 == "_" })
+                .map { $0.prefix(1).uppercased() + $0.dropFirst() }
+                .joined(separator: " ")
         }
+    }
+
+    init(from decoder: Decoder) throws {
+        rawValue = try decoder.singleValueContainer().decode(String.self)
+    }
+
+    func encode(to encoder: Encoder) throws {
+        var container = encoder.singleValueContainer()
+        try container.encode(rawValue)
     }
 }
 

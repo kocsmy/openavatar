@@ -18,6 +18,28 @@ struct MenuBarView: View {
                     .lineLimit(3)
             }
 
+            if !app.proactiveSuggestions.isEmpty {
+                sectionTitle("Suggestions")
+                ForEach(app.proactiveSuggestions) { suggestion in
+                    HStack(alignment: .top, spacing: 8) {
+                        Image(systemName: "lightbulb")
+                            .foregroundStyle(.yellow)
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text(suggestion.title).font(.callout)
+                            Text(suggestion.rationale).font(.caption2)
+                                .foregroundStyle(.tertiary).lineLimit(2)
+                        }
+                        Spacer()
+                        Button("Prepare") { app.accept(suggestion) }
+                            .controlSize(.small)
+                        Button {
+                            app.dismissSuggestion(suggestion)
+                        } label: { Image(systemName: "xmark.circle") }
+                            .buttonStyle(.borderless)
+                    }
+                }
+            }
+
             if !app.pendingApprovals.isEmpty {
                 sectionTitle("Waiting for your approval")
                 ForEach(app.pendingApprovals) { approval in
