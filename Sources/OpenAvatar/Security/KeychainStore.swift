@@ -23,13 +23,45 @@ struct KeychainStore {
         case gmailRefreshToken = "integration.email.gmail.refresh"
     }
 
+    // MARK: Enum-keyed accessors (built-in secrets)
+
+    func set(_ value: String, for key: Key) { setRaw(value, account: key.rawValue) }
+    func get(_ key: Key) -> String? { getRaw(account: key.rawValue) }
+    func delete(_ key: Key) { deleteRaw(account: key.rawValue) }
+
+    func deleteAll() {
+        for key in Key.allCases { delete(key) }
+    }
+
+    var hasAnyLLMKey: Bool {
+        return self.get(.anthropicAPIKey) != nil
+            || self.get(.openAIAPIKey) != nil
+            || self.get(.geminiAPIKey) != nil
+    }
+
+    // MARK: Dynamic secrets (manifest/MCP integrations — arbitrary IDs)
+
+    func setSecret(_ value: String, forIntegration id: String) {
+        setRaw(value, account: "dynamic.integration.\(id)")
+    }
+
+    func secret(forIntegration id: String) -> String? {
+        getRaw(account: "dynamic.integration.\(id)")
+    }
+
+    func deleteSecret(forIntegration id: String) {
+        deleteRaw(account: "dynamic.integration.\(id)")
+    }
+
+    // MARK: Raw primitives
+
 #if canImport(Security)
-    func set(_ value: String, for key: Key) {
+    private func setRaw(_ value: String, account: String) {
         let data = Data(value.utf8)
         let query: [String: Any] = [
             kSecClass as String: kSecClassGenericPassword,
             kSecAttrService as String: service,
-            kSecAttrAccount as String: key.rawValue
+            kSecAttrAccount as String: account
         ]
         let attributes: [String: Any] = [
             kSecValueData as String: data,
@@ -43,11 +75,11 @@ struct KeychainStore {
         }
     }
 
-    func get(_ key: Key) -> String? {
+    private func getRaw(account: String) -> String? {
         let query: [String: Any] = [
             kSecClass as String: kSecClassGenericPassword,
             kSecAttrService as String: service,
-            kSecAttrAccount as String: key.rawValue,
+            kSecAttrAccount as String: account,
             kSecReturnData as String: true,
             kSecMatchLimit as String: kSecMatchLimitOne
         ]
@@ -57,31 +89,21 @@ struct KeychainStore {
         return String(data: data, encoding: .utf8)
     }
 
-    func delete(_ key: Key) {
+    private func deleteRaw(account: String) {
         let query: [String: Any] = [
             kSecClass as String: kSecClassGenericPassword,
             kSecAttrService as String: service,
-            kSecAttrAccount as String: key.rawValue
+            kSecAttrAccount as String: account
         ]
         SecItemDelete(query as CFDictionary)
     }
 #else
     // Non-Apple platforms (CI linting only): in-memory fallback, never persisted.
     private static var memory: [String: String] = [:]
-    func set(_ value: String, for key: Key) { Self.memory[key.rawValue] = value }
-    func get(_ key: Key) -> String? { Self.memory[key.rawValue] }
-    func delete(_ key: Key) { Self.memory[key.rawValue] = nil }
+    private func setRaw(_ value: String, account: String) { Self.memory[account] = value }
+    private func getRaw(account: String) -> String? { Self.memory[account] }
+    private func deleteRaw(account: String) { Self.memory[account] = nil }
 #endif
-
-    func deleteAll() {
-        for key in Key.allCases { delete(key) }
-    }
-
-    var hasAnyLLMKey: Bool {
-        return self.get(.anthropicAPIKey) != nil
-            || self.get(.openAIAPIKey) != nil
-            || self.get(.geminiAPIKey) != nil
-    }
 }
 
 /// Redacts anything that looks like a secret before it can reach logs or

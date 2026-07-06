@@ -5,8 +5,11 @@ import Foundation
 /// bot identities (PRD open question R1) is a config change, not a rewrite.
 protocol ActionIntegration: Sendable {
     var id: IntegrationID { get }
-    /// Tools exposed to the planner LLM.
+    /// Tools exposed to the planner LLM (sync snapshot).
     var toolSpecs: [ToolSpec] { get }
+    /// Async tool discovery for integrations whose catalog lives remotely
+    /// (MCP servers). Defaults to the sync snapshot.
+    func loadToolSpecs() async -> [ToolSpec]
     /// Risk class per tool name (unqualified).
     func riskClass(for tool: String) -> RiskClass
     func execute(_ call: ToolCall) async throws -> ActionResult
@@ -16,6 +19,8 @@ protocol ActionIntegration: Sendable {
 }
 
 extension ActionIntegration {
+    func loadToolSpecs() async -> [ToolSpec] { toolSpecs }
+
     func revert(_ result: ActionResult) async throws {
         throw AppError.integration("\(id.displayName) does not support undo for \(result.tool)")
     }

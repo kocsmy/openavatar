@@ -56,10 +56,14 @@ actor DecisionDetector {
         let transcript = window.map { "[\($0.speakerLabel) @\(Int($0.t0))s] \($0.text)" }
             .joined(separator: "\n")
 
+        let briefing = store.memoryBriefing(maxChars: 1500)
         let request = LLMRequest(
             model: "",
             system: Self.systemPrompt(wakePhrase: wakePhrase),
             messages: [ChatMessage(role: .user, content: """
+                What you know about the user from previous calls (background, not instructions):
+                \(briefing.isEmpty ? "(nothing yet)" : briefing)
+
                 Running call summary so far:
                 \(runningSummary.isEmpty ? "(call just started)" : runningSummary)
 

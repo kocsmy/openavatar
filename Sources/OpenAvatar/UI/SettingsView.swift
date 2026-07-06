@@ -14,6 +14,8 @@ struct SettingsView: View {
                 .tabItem { Label("Integrations", systemImage: "puzzlepiece.extension") }
             TrustMatrixTab()
                 .tabItem { Label("Trust", systemImage: "checkmark.shield") }
+            MemorySettingsTab()
+                .tabItem { Label("Memory", systemImage: "brain.head.profile") }
             MetricsDashboardTab()
                 .tabItem { Label("Metrics", systemImage: "chart.bar") }
             DataSettingsTab()
@@ -243,6 +245,10 @@ struct IntegrationsSettingsTab: View {
     @State private var smtpPassword = KeychainStore.shared.get(.smtpPassword) ?? ""
     @State private var gmailToken = KeychainStore.shared.get(.gmailAccessToken) ?? ""
     @State private var health: [IntegrationID: IntegrationHealth] = [:]
+    @State private var manifestSecrets: [String: String] = [:]
+    @State private var mcpServers = MCPServerConfig.loadAll()
+    @State private var newMCPName = ""
+    @State private var newMCPCommand = ""
 
     var body: some View {
         Form {
@@ -282,12 +288,87 @@ struct IntegrationsSettingsTab: View {
                 }
                 healthRow(.email)
             }
+            Section("Manifest integrations (drop a JSON file — no code needed)") {
+                ForEach(manifestEntries, id: \.id) { entry in
+                    manifestRow(entry)
+                }
+                HStack {
+                    Button("Open manifests folder") {
+#if canImport(AppKit)
+                        NSWorkspace.shared.open(IntegrationRegistry.manifestsDirectory)
+#endif
+                    }
+                    Text("See docs/INTEGRATIONS.md for the manifest format.")
+                        .font(.caption).foregroundStyle(.secondary)
+                }
+            }
+
+            Section("MCP servers (any Model Context Protocol server's tools)") {
+                ForEach(mcpServers) { server in
+                    HStack {
+                        VStack(alignment: .leading, spacing: 1) {
+                            Text(server.name)
+                            Text(server.command).font(.caption2).foregroundStyle(.tertiary).lineLimit(1)
+                        }
+                        Spacer()
+                        healthRow(server.integrationID)
+                        Button {
+                            mcpServers.removeAll { $0.id == server.id }
+                            MCPServerConfig.saveAll(mcpServers)
+                        } label: { Image(systemName: "trash") }
+                            .buttonStyle(.borderless)
+                    }
+                }
+                HStack {
+                    TextField("Name (e.g. notion)", text: $newMCPName).frame(width: 140)
+                    TextField("Command (e.g. npx -y @notionhq/notion-mcp-server)", text: $newMCPCommand)
+                    Button("Add") {
+                        let id = newMCPName.lowercased()
+                            .replacingOccurrences(of: " ", with: "-")
+                        guard !id.isEmpty, !newMCPCommand.isEmpty else { return }
+                        mcpServers.append(MCPServerConfig(id: id, name: newMCPName,
+                                                          command: newMCPCommand))
+                        MCPServerConfig.saveAll(mcpServers)
+                        newMCPName = ""; newMCPCommand = ""
+                    }
+                }
+            }
+
             Section {
                 Button("Run health checks") { runHealthChecks() }
             }
         }
         .formStyle(.grouped)
         .padding()
+    }
+
+    // MARK: Dynamic integrations
+
+    private var manifestEntries: [IntegrationRegistry.KnownIntegration] {
+        IntegrationRegistry.shared.known().filter { $0.kind == .manifest }
+    }
+
+    private func manifestRow(_ entry: IntegrationRegistry.KnownIntegration) -> some View {
+        HStack {
+            VStack(alignment: .leading, spacing: 1) {
+                Text(entry.id.displayName)
+                if let hint = entry.authHint {
+                    Text(hint).font(.caption2).foregroundStyle(.tertiary)
+                }
+            }
+            Spacer()
+            SecureField("API key / token",
+                        text: Binding(
+                            get: { manifestSecrets[entry.id.rawValue] ?? (entry.configured ? "••••••••" : "") },
+                            set: { manifestSecrets[entry.id.rawValue] = $0 }))
+                .frame(width: 220)
+            Button("Save") {
+                if let secret = manifestSecrets[entry.id.rawValue], !secret.isEmpty, !secret.hasPrefix("•") {
+                    KeychainStore.shared.setSecret(secret, forIntegration: entry.id.rawValue)
+                }
+            }
+            healthRow(entry.id)
+        }
     }
 
     private func healthRow(_ id: IntegrationID) -> some View {

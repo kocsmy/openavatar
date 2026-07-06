@@ -7,8 +7,14 @@ struct TrustMatrixTab: View {
     @EnvironmentObject var app: AppState
     @EnvironmentObject var settings: SettingsStore
 
-    /// Static catalog of all known tools (shown even when the integration
-    /// isn't connected yet, so users can pre-configure policy).
+    /// Dynamic rows from manifest + MCP integrations (native rows below are
+    /// curated). Refreshed on each render so new manifests/servers show up.
+    private var dynamicRows: [(qualified: String, risk: RiskClass)] {
+        IntegrationRegistry.shared.dynamicTrustRows()
+    }
+
+    /// Native tools (shown even when the integration isn't connected yet, so
+    /// users can pre-configure policy).
     private static let rows: [(qualified: String, risk: RiskClass)] = [
         ("github.create_branch", .write),
         ("github.commit_changes", .write),
@@ -47,6 +53,17 @@ struct TrustMatrixTab: View {
                 VStack(spacing: 4) {
                     ForEach(Self.rows, id: \.qualified) { row in
                         matrixRow(row.qualified, risk: row.risk)
+                    }
+                    let extra = dynamicRows
+                    if !extra.isEmpty {
+                        Divider().padding(.vertical, 4)
+                        Text("From manifests & MCP servers")
+                            .font(.caption2.weight(.semibold))
+                            .foregroundStyle(.secondary)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                        ForEach(extra, id: \.qualified) { row in
+                            matrixRow(row.qualified, risk: row.risk)
+                        }
                     }
                 }
             }

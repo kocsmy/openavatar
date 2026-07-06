@@ -17,51 +17,31 @@ actor ActionExecutor {
 
     // MARK: Registry (constructed fresh so Settings changes apply immediately)
 
+    /// Native plugins + manifest integrations + MCP servers, all behind the
+    /// same protocol (see IntegrationRegistry).
     func integrations() -> [IntegrationID: ActionIntegration] {
-        var result: [IntegrationID: ActionIntegration] = [:]
-        let d = UserDefaults.standard
-        if let token = keychain.get(.githubToken) {
-            result[.github] = GitHubIntegration(token: token)
-        }
-        if let token = keychain.get(.slackUserToken) {
-            result[.slack] = SlackIntegration(token: token)
-        }
-        if let key = keychain.get(.linearAPIKey) {
-            result[.linear] = LinearIntegration(apiKey: key,
-                                                defaultTeamKey: d.string(forKey: "linearTeamKey") ?? "")
-        }
-        let emailConfig = EmailIntegration.Config(
-            backend: EmailBackend(rawValue: d.string(forKey: "emailBackend") ?? "") ?? .smtp,
-            smtpHost: d.string(forKey: "smtpHost") ?? "",
-            smtpPort: d.object(forKey: "smtpPort") as? Int ?? 465,
-            smtpUsername: d.string(forKey: "smtpUsername") ?? "",
-            smtpPassword: keychain.get(.smtpPassword),
-            gmailAccessToken: keychain.get(.gmailAccessToken),
-            fromAddress: d.string(forKey: "emailFromAddress") ?? "",
-            assistantName: d.string(forKey: "assistantName") ?? "Avatar",
-            userName: d.string(forKey: "userDisplayName") ?? NSFullUserName())
-        if emailConfig.backend == .gmail ? emailConfig.gmailAccessToken != nil
-                                         : !emailConfig.smtpHost.isEmpty {
-            result[.email] = EmailIntegration(config: emailConfig)
-        }
-        return result
+        IntegrationRegistry.shared.active()
     }
 
     /// Tool catalog for the planner: every configured integration's tools with
-    /// qualified names and risk classes.
+    /// qualified names and risk classes. Async so remote catalogs (MCP) can be
+    /// discovered on demand.
     struct CatalogEntry: Sendable {
         let integration: IntegrationID
         let spec: ToolSpec
         let riskClass: RiskClass
     }
 
-    func toolCatalog() -> [CatalogEntry] {
-        integrations().values.flatMap { integration in
-            integration.toolSpecs.map { spec in
-                CatalogEntry(integration: integration.id, spec: spec,
-                             riskClass: integration.riskClass(for: spec.name))
+    func toolCatalog() async -> [CatalogEntry] {
+        var entries: [CatalogEntry] = []
+        for integration in integrations().values {
+            let specs = await integration.loadToolSpecs()
+            for spec in specs {
+                entries.append(CatalogEntry(integration: integration.id, spec: spec,
+                                            riskClass: integration.riskClass(for: spec.name)))
             }
         }
+        return entries
     }
 
     func riskClass(integration integrationID: IntegrationID, tool: String) -> RiskClass {

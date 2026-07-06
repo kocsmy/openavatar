@@ -94,6 +94,28 @@ final class ContextStore {
                 );
                 """)
         }
+        // v2 — compounding memory: per-call digests + long-lived facts about
+        // the user (the "personal Jarvis" layer).
+        migrator.registerMigration("v2-memory") { db in
+            try db.execute(sql: """
+                CREATE TABLE call_digests (
+                    call_id TEXT PRIMARY KEY,
+                    digest TEXT NOT NULL,
+                    created_at REAL NOT NULL
+                );
+                CREATE TABLE memory_facts (
+                    id TEXT PRIMARY KEY,
+                    category TEXT NOT NULL,        -- identity|preference|project|person|commitment|pattern
+                    content TEXT NOT NULL,
+                    salience REAL NOT NULL DEFAULT 1.0,
+                    status TEXT NOT NULL DEFAULT 'active',   -- active|retired
+                    source_call_id TEXT,
+                    created_at REAL NOT NULL,
+                    last_reinforced_at REAL NOT NULL
+                );
+                CREATE INDEX idx_facts_status ON memory_facts(status, category);
+                """)
+        }
         try migrator.migrate(dbQueue)
     }
 
@@ -314,7 +336,8 @@ final class ContextStore {
         try dbQueue.read { db in
             var export: [String: JSONValue] = [:]
             let tables = ["calls", "transcript_segments", "decisions", "actions",
-                          "entities", "metrics_daily", "llm_usage"]
+                          "entities", "metrics_daily", "llm_usage",
+                          "call_digests", "memory_facts"]
             for table in tables {
                 let rows = try Row.fetchAll(db, sql: "SELECT * FROM \(table)")
                 export[table] = .array(rows.map { row in
@@ -338,7 +361,8 @@ final class ContextStore {
     func deleteAllData() throws {
         try dbQueue.write { db in
             for table in ["calls", "transcript_segments", "decisions", "actions",
-                          "entities", "metrics_daily", "llm_usage"] {
+                          "entities", "metrics_daily", "llm_usage",
+                          "call_digests", "memory_facts"] {
                 try db.execute(sql: "DELETE FROM \(table)")
             }
         }

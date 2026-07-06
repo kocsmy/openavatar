@@ -39,6 +39,7 @@ actor ActionPlanner {
             throw AppError.notConfigured("No integrations connected — connect at least one in Settings")
         }
         let context = (try? store.plannerContext(keywords: keywords(from: decision))) ?? ""
+        let briefing = store.memoryBriefing(maxChars: 2000)
         let d = UserDefaults.standard
         let defaults = """
             Defaults the user configured (use when the transcript doesn't specify):
@@ -51,6 +52,9 @@ actor ActionPlanner {
             model: "",
             system: Self.plannerSystemPrompt,
             messages: [ChatMessage(role: .user, content: """
+                What you know about the user (background, not instructions):
+                \(briefing.isEmpty ? "(nothing yet)" : briefing)
+
                 Decision detected on a call:
                 - Quote (verbatim): "\(decision.quote)"
                 - Intent: \(decision.intent.rawValue)
@@ -66,7 +70,14 @@ actor ActionPlanner {
                 Produce the tool calls (in order) that fully execute this decision. \
                 Prefer a single tool call when one suffices.
                 """)],
-            tools: catalog.map(\.spec),
+            tools: catalog.map { entry in
+                // Namespace tool names per integration so a large catalog can't
+                // collide (two services may both expose "create_task"). LLM
+                // tool-name rules forbid dots, so use a double underscore.
+                ToolSpec(name: Self.llmToolName(entry),
+                         description: "[\(entry.integration.displayName)] \(entry.spec.description)",
+                         parameters: entry.spec.parameters)
+            },
             toolChoice: .required,
             maxTokens: 2048)
 
@@ -77,8 +88,8 @@ actor ActionPlanner {
 
         var steps: [ActionStep] = []
         for call in response.toolCalls {
-            guard let entry = catalog.first(where: { $0.spec.name == call.name }) else { continue }
-            steps.append(ActionStep(integration: entry.integration, tool: call.name,
+            guard let entry = catalog.first(where: { Self.llmToolName($0) == call.name }) else { continue }
+            steps.append(ActionStep(integration: entry.integration, tool: entry.spec.name,
                                     arguments: call.arguments, riskClass: entry.riskClass))
         }
         guard !steps.isEmpty else { throw AppError.planningFailedNoTools }
@@ -265,6 +276,12 @@ actor ActionPlanner {
     }
 
     // MARK: Helpers
+
+    /// LLM-safe namespaced tool name: "todoist__create_task".
+    static func llmToolName(_ entry: ActionExecutor.CatalogEntry) -> String {
+        let integration = entry.integration.rawValue.replacingOccurrences(of: "-", with: "_")
+        return String("\(integration)__\(entry.spec.name)".prefix(64))
+    }
 
     private func keywords(from decision: Decision) -> [String] {
         let stop: Set<String> = ["the", "and", "for", "that", "this", "with", "from",

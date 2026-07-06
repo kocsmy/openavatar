@@ -24,6 +24,8 @@ Audio Capture ──► Transcription ──► Decision Detector ──► Acti
 - **Active mode**: say "*<assistant name>*, open a ticket for that" mid-call and it happens immediately — for action types you've marked Autonomous in the trust matrix.
 - **Trust ladder**: every action type starts as *Ask first*. Destructive actions (merge PR, send email) can only be set Autonomous after **10 approved executions with no revert and no edit**. Requests spoken by *other* call participants are never executed destructively without your approval.
 - **🤖 attribution** is enforced in the executor code (not prompts): Slack messages, Linear titles, PR titles/comments, and email footers all carry the marker.
+- **Compounding memory**: every call is distilled into a digest + durable facts (identity, preferences, projects, people, commitments, patterns) with salience that reinforces or decays over time. A token-budgeted briefing feeds detection and planning, and open commitments drive proactive suggestions in the menu bar — always Ask-first. Inspect or wipe it all in Settings → Memory.
+- **Unbounded integrations**: beyond the 4 native plugins, add integrations by dropping a JSON manifest (generic HTTP engine, no code) or pointing at any MCP server (its tools are discovered at runtime). See [`docs/INTEGRATIONS.md`](docs/INTEGRATIONS.md).
 
 ## Privacy posture
 
