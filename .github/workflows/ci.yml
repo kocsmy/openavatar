@@ -3,8 +3,12 @@ name: CI
 on:
   push:
     branches: [main, "claude/**"]
+    tags: ["v*"]
   pull_request:
   workflow_dispatch:
+
+permissions:
+  contents: write # tag pushes create releases with the DMG attached
 
 jobs:
   build-and-test:
@@ -25,3 +29,24 @@ jobs:
 
       - name: Assemble app bundle
         run: ./scripts/make-app.sh release
+
+      - name: Build DMG installer
+        run: ./scripts/make-dmg.sh
+
+      - name: Upload DMG artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: OpenAvatar-dmg
+          path: build/OpenAvatar.dmg
+          if-no-files-found: error
+
+      - name: Release (on version tags)
+        if: startsWith(github.ref, 'refs/tags/v')
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh release create "${GITHUB_REF_NAME}" build/OpenAvatar.dmg \
+            --repo "${GITHUB_REPOSITORY}" \
+            --title "OpenAvatar ${GITHUB_REF_NAME}" \
+            --generate-notes \
+            --notes "Drag-and-drop DMG. The app is ad-hoc signed (not notarized): after dragging to Applications, run \`xattr -cr /Applications/OpenAvatar.app\` before first launch, or right-click → Open."
