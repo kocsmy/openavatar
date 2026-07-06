@@ -1,0 +1,28 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>CFBundleIdentifier</key>
+    <string>com.openavatar.app</string>
+    <key>CFBundleName</key>
+    <string>OpenAvatar</string>
+    <key>CFBundleDisplayName</key>
+    <string>OpenAvatar</string>
+    <key>CFBundleExecutable</key>
+    <string>OpenAvatar</string>
+    <key>CFBundlePackageType</key>
+    <string>APPL</string>
+    <key>CFBundleShortVersionString</key>
+    <string>1.0.0</string>
+    <key>CFBundleVersion</key>
+    <string>1</string>
+    <key>LSMinimumSystemVersion</key>
+    <string>14.4</string>
+    <key>LSUIElement</key>
+    <true/>
+    <key>NSMicrophoneUsageDescription</key>
+    <string>OpenAvatar transcribes your side of calls locally to detect action items. Nothing is recorded unless you switch listening on, and the menu-bar icon always shows recording state.</string>
+    <key>NSAudioCaptureUsageDescription</key>
+    <string>OpenAvatar captures call audio (the other participants) locally to detect decisions and action items. It never joins your calls and never records while the indicator is off.</string>
+</dict>
+</plist>
