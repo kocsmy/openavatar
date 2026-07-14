@@ -38,12 +38,15 @@ struct GeminiProvider: LLMProvider {
             }
         }
 
+        var generationConfig: [String: JSONValue] = [
+            "maxOutputTokens": .number(Double(req.maxTokens))
+        ]
+        if let temperature = req.temperature {
+            generationConfig["temperature"] = .number(temperature)
+        }
         var body: [String: JSONValue] = [
             "contents": .array(contents),
-            "generationConfig": .object([
-                "maxOutputTokens": .number(Double(req.maxTokens)),
-                "temperature": .number(req.temperature)
-            ])
+            "generationConfig": .object(generationConfig)
         ]
         if !req.system.isEmpty {
             body["systemInstruction"] = .object(["parts": .array([.object(["text": .string(req.system)])])])

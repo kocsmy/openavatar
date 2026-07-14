@@ -33,12 +33,17 @@ struct OllamaProvider: LLMProvider {
                 messages.append(.object(["role": "tool", "content": .string(message.content)]))
             }
         }
+        var options: [String: JSONValue] = [
+            "num_predict": .number(Double(req.maxTokens))
+        ]
+        if let temperature = req.temperature {
+            options["temperature"] = .number(temperature)
+        }
         var body: [String: JSONValue] = [
             "model": .string(req.model),
             "messages": .array(messages),
             "stream": .bool(false),
-            "options": .object(["temperature": .number(req.temperature),
-                                "num_predict": .number(Double(req.maxTokens))])
+            "options": .object(options)
         ]
         if !req.tools.isEmpty {
             body["tools"] = .array(req.tools.map { tool in
