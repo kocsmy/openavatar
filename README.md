@@ -54,6 +54,8 @@ open build/OpenAvatar.app
 swift test
 ```
 
+**Auto-updates:** after the first install, the app keeps itself current via [Sparkle](https://sparkle-project.org) — it checks the GitHub Releases appcast hourly, downloads updates in the background, and asks to relaunch. Updates are EdDSA-signed in CI (`SPARKLE_ED_PRIVATE_KEY` repo secret; public key in `Resources/Info.plist`). Manual check: Settings → General → "Check for updates now".
+
 First launch opens an onboarding wizard that walks through permissions, transcription mode, LLM keys (validated live against each provider's model-list endpoint), integrations (validated with health checks), the wake phrase, trust defaults, and the admin-minutes baseline for the metrics dashboard.
 
 ### Tokens you'll need

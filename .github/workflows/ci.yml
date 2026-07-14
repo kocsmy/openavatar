@@ -50,9 +50,22 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           TAG: ${{ startsWith(github.ref, 'refs/tags/v') && github.ref_name || inputs.release_tag }}
+          SPARKLE_ED_PRIVATE_KEY: ${{ secrets.SPARKLE_ED_PRIVATE_KEY }}
         run: |
-          gh release create "${TAG}" build/OpenAvatar.dmg \
+          set -euo pipefail
+          if [ -z "${SPARKLE_ED_PRIVATE_KEY:-}" ]; then
+            echo "::error::SPARKLE_ED_PRIVATE_KEY secret is not set. Auto-updates must be signed — add the secret in repo Settings → Secrets and variables → Actions, then re-run."
+            exit 1
+          fi
+          # Rebuild the bundle with the release version stamped in (Sparkle
+          # compares CFBundleVersion to decide whether an update applies).
+          VERSION="${TAG#v}" BUILD_NUMBER="${GITHUB_RUN_NUMBER}" ./scripts/make-app.sh release
+          ./scripts/make-dmg.sh
+          ditto -c -k --keepParent build/OpenAvatar.app build/OpenAvatar.zip
+          pip3 install --quiet pynacl || pip3 install --quiet --break-system-packages pynacl
+          python3 scripts/make_appcast.py "${TAG}" build/OpenAvatar.zip > build/appcast.xml
+          gh release create "${TAG}" build/OpenAvatar.dmg build/OpenAvatar.zip build/appcast.xml \
             --repo "${GITHUB_REPOSITORY}" \
             --target "${GITHUB_SHA}" \
             --title "OpenAvatar ${TAG}" \
-            --notes "Drag-and-drop DMG installer for macOS 14.4+. The app is ad-hoc signed (not notarized): after dragging to Applications, run \`xattr -cr /Applications/OpenAvatar.app\` before first launch, or right-click → Open."
+            --notes "First install: download the DMG, drag to Applications, run \`xattr -cr /Applications/OpenAvatar.app\` before first launch (ad-hoc signed, not notarized). Already installed? The app updates itself: it downloads new versions in the background and asks to relaunch. The zip + appcast.xml assets are the auto-update feed."
