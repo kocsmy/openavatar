@@ -18,6 +18,12 @@ struct ExecutedAction: Identifiable {
     var canUndo: Bool { result.revertHandle != nil && !undone }
 }
 
+struct ErrorEntry: Identifiable {
+    let id = UUID()
+    let at = Date()
+    let message: String    // full, untruncated (secrets already redacted)
+}
+
 /// Main-actor coordinator wiring the whole pipeline:
 /// capture → transcription → detection → planning → trust → execution.
 @MainActor
@@ -33,6 +39,7 @@ final class AppState: ObservableObject {
     @Published var pendingApprovals: [PendingApproval] = []
     @Published var executedActions: [ExecutedAction] = []
     @Published var lastError: String?
+    @Published var errorLog: [ErrorEntry] = []
     @Published var showPostCallReview = false
     @Published var isPlanning = false
     @Published var suggestedCallApp: String?
@@ -88,7 +95,7 @@ final class AppState: ObservableObject {
             isListening = true
             Task { await detector.updateWakePhrase(settings.assistantName) }
         } catch {
-            lastError = Redactor.redact(error.localizedDescription)
+            reportError(error)
         }
     }
 
@@ -149,6 +156,20 @@ final class AppState: ObservableObject {
         isListening ? stopListening() : startListening()
     }
 
+    // MARK: - Error reporting (full text kept for diagnosis, spec §4.3)
+
+    func reportError(_ error: Error) {
+        let full = Redactor.redact(error.localizedDescription)
+        lastError = full
+        errorLog.insert(ErrorEntry(message: full), at: 0)
+        if errorLog.count > 20 { errorLog.removeLast(errorLog.count - 20) }
+    }
+
+    func clearErrors() {
+        lastError = nil
+        errorLog.removeAll()
+    }
+
     // MARK: - Pipeline
 
     private func handle(chunk: AudioChunk) {
@@ -169,7 +190,7 @@ final class AppState: ObservableObject {
                 }
             } catch {
                 // Graceful degradation (spec §4.3): surface, never silently drop.
-                lastError = Redactor.redact(error.localizedDescription)
+                reportError(error)
             }
         }
     }
@@ -212,7 +233,7 @@ final class AppState: ObservableObject {
                 pendingApprovals.append(PendingApproval(decision: decision, plan: plan))
             }
         } catch {
-            lastError = Redactor.redact(error.localizedDescription)
+            reportError(error)
         }
     }
 
@@ -228,7 +249,7 @@ final class AppState: ObservableObject {
                 let plan = try await planner.plan(for: decision)
                 pendingApprovals.append(PendingApproval(decision: decision, plan: plan))
             } catch {
-                lastError = Redactor.redact(error.localizedDescription)
+                reportError(error)
             }
         }
     }
@@ -241,7 +262,7 @@ final class AppState: ObservableObject {
                                                status: approval.edited ? .edited : .approved)
                 try await runPlan(approval.plan, decision: approval.decision, edited: approval.edited)
             } catch {
-                lastError = Redactor.redact(error.localizedDescription)
+                reportError(error)
                 // Put it back so the user can retry or dismiss.
                 pendingApprovals.append(approval)
             }
@@ -284,7 +305,7 @@ final class AppState: ObservableObject {
                     executedActions[index].undone = true
                 }
             } catch {
-                lastError = Redactor.redact(error.localizedDescription)
+                reportError(error)
             }
         }
     }

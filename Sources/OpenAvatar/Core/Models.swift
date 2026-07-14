@@ -254,7 +254,7 @@ enum AppError: LocalizedError {
     var errorDescription: String? {
         switch self {
         case .notConfigured(let what): return "Not configured: \(what)"
-        case .http(let status, let body): return "HTTP \(status): \(body.prefix(300))"
+        case .http(let status, let body): return "HTTP \(status): \(body.prefix(2000))"
         case .parsing(let msg): return "Parse error: \(msg)"
         case .integration(let msg): return msg
         case .audio(let msg): return "Audio: \(msg)"

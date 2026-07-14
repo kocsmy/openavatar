@@ -21,7 +21,7 @@ struct SettingsView: View {
             DataSettingsTab()
                 .tabItem { Label("Data", systemImage: "externaldrive") }
         }
-        .frame(width: 640, height: 520)
+        .frame(width: 720, height: 640)
     }
 }
 
@@ -70,7 +70,10 @@ struct GeneralSettingsTab: View {
 
 struct TranscriptionSettingsTab: View {
     @EnvironmentObject var settings: SettingsStore
-    @State private var sttKey = KeychainStore.shared.get(.cloudSTTAPIKey) ?? ""
+    @StateObject private var whisperSetup = WhisperSetupService()
+    @State private var sttKey = ""
+    @State private var sttKeySaved = KeychainStore.shared.get(.cloudSTTAPIKey) != nil
+    @State private var showAdvanced = false
 
     var body: some View {
         Form {
@@ -87,20 +90,20 @@ struct TranscriptionSettingsTab: View {
                 }
             }
             if settings.transcriptionMode == .local {
-                Section("whisper.cpp (local, private, offline)") {
-                    TextField("whisper-cli path", text: $settings.whisperCLIPath)
-                    TextField("Model path (.bin)", text: $settings.whisperModelPath)
-                    Text("Install with `brew install whisper-cpp`, then download a model, e.g.:\nhuggingface.co/ggerganov/whisper.cpp → ggml-base.en.bin (bundled default), small/medium for higher accuracy.")
-                        .font(.caption).foregroundStyle(.secondary)
+                Section("Local transcription (whisper.cpp)") {
+                    WhisperSetupView(service: whisperSetup)
+                    DisclosureGroup("Advanced: paths", isExpanded: $showAdvanced) {
+                        TextField("whisper-cli path", text: $settings.whisperCLIPath)
+                        TextField("Model path (.bin)", text: $settings.whisperModelPath)
+                    }
                 }
             } else {
                 Section("Cloud STT (OpenAI-compatible, BYO key)") {
                     TextField("Base URL", text: $settings.cloudSTTBaseURL)
                     TextField("Model", text: $settings.cloudSTTModel)
-                    SecureField("API key", text: $sttKey)
-                        .onChange(of: sttKey) { _, new in
-                            KeychainStore.shared.set(new, for: .cloudSTTAPIKey)
-                        }
+                    SecretField(label: "API key", text: $sttKey, saved: $sttKeySaved) {
+                        KeychainStore.shared.set(sttKey, for: .cloudSTTAPIKey)
+                    }
                     Text("Any OpenAI-compatible transcription endpoint works (override the base URL for Deepgram/Groq-style services).")
                         .font(.caption).foregroundStyle(.secondary)
                 }
@@ -111,18 +114,106 @@ struct TranscriptionSettingsTab: View {
     }
 }
 
+/// Shared one-click whisper setup UI (used here and in onboarding).
+struct WhisperSetupView: View {
+    @ObservedObject var service: WhisperSetupService
+    @EnvironmentObject var settings: SettingsStore
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            let ready = WhisperSetupService.isReady(settings: settings)
+            HStack(spacing: 8) {
+                Image(systemName: ready ? "checkmark.circle.fill" : "arrow.down.circle")
+                    .foregroundStyle(ready ? Color.green : Color.accentColor)
+                Text(ready ? "Local transcription is ready."
+                           : "One click installs whisper.cpp (via Homebrew) and downloads the base.en model (~150 MB).")
+                    .font(.callout)
+                Spacer()
+                Button(ready ? "Re-check" : "Set up automatically") {
+                    Task { await service.run(settings: settings) }
+                }
+                .buttonStyle(.borderedProminent)
+                .disabled(service.isBusy)
+            }
+            switch service.phase {
+            case .idle: EmptyView()
+            case .checking:
+                Label { Text("Checking what's installed…") } icon: { ProgressView().controlSize(.small) }
+                    .font(.caption)
+            case .installingCLI:
+                Label { Text("Installing whisper-cpp via Homebrew (can take a few minutes)…") }
+                    icon: { ProgressView().controlSize(.small) }
+                    .font(.caption)
+            case .downloadingModel:
+                Label { Text("Downloading base.en model (~150 MB)…") }
+                    icon: { ProgressView().controlSize(.small) }
+                    .font(.caption)
+            case .done(let message):
+                Label(message, systemImage: "checkmark.circle.fill")
+                    .font(.caption).foregroundStyle(.green)
+            case .failed(let message):
+                Label(message, systemImage: "xmark.circle.fill")
+                    .font(.caption).foregroundStyle(.red)
+                    .textSelection(.enabled)
+            }
+        }
+    }
+}
+
+// MARK: - Reusable secret field with explicit Save
+
+/// Paste → Save → visible confirmation. Never pre-fills the real secret;
+/// shows a "saved" badge when one exists in the Keychain.
+struct SecretField: View {
+    let label: String
+    @Binding var text: String
+    @Binding var saved: Bool
+    var onSave: () -> Void
+
+    @State private var justSaved = false
+
+    var body: some View {
+        HStack(spacing: 8) {
+            SecureField(saved ? "\(label) — saved ✓ (paste to replace)" : label, text: $text)
+            Button("Save") {
+                guard !text.isEmpty else { return }
+                onSave()
+                saved = true
+                text = ""
+                justSaved = true
+                Task {
+                    try? await Task.sleep(nanoseconds: 2_500_000_000)
+                    justSaved = false
+                }
+            }
+            .disabled(text.isEmpty)
+            if justSaved {
+                Label("Saved", systemImage: "checkmark.circle.fill")
+                    .font(.caption).foregroundStyle(.green)
+                    .labelStyle(.titleAndIcon)
+            } else if saved {
+                Image(systemName: "key.fill").foregroundStyle(.green)
+                    .help("A token is saved in the Keychain")
+            }
+        }
+    }
+}
+
 // MARK: - Models (LLM providers + per-task routing)
 
 struct ModelsSettingsTab: View {
     @EnvironmentObject var app: AppState
-    @State private var keys: [ProviderID: String] = [
-        .anthropic: KeychainStore.shared.get(.anthropicAPIKey) ?? "",
-        .openai: KeychainStore.shared.get(.openAIAPIKey) ?? "",
-        .gemini: KeychainStore.shared.get(.geminiAPIKey) ?? ""
+    @EnvironmentObject var settings: SettingsStore
+    @State private var keys: [ProviderID: String] = [:]
+    @State private var keySaved: [ProviderID: Bool] = [
+        .anthropic: KeychainStore.shared.get(.anthropicAPIKey) != nil,
+        .openai: KeychainStore.shared.get(.openAIAPIKey) != nil,
+        .gemini: KeychainStore.shared.get(.geminiAPIKey) != nil
     ]
     @State private var models: [ProviderID: [ModelInfo]] = [:]
     @State private var status: [ProviderID: String] = [:]
-    @EnvironmentObject var settings: SettingsStore
+    @State private var routeTestResults: [LLMTask: String] = [:]
+    @State private var testingRoutes = false
 
     var body: some View {
         Form {
@@ -138,7 +229,7 @@ struct ModelsSettingsTab: View {
                     Button("Check") { loadModels(for: .ollama) }
                 }
                 TextField("Ollama URL", text: $settings.ollamaBaseURL).font(.caption)
-                if let s = status[.ollama] { Text(s).font(.caption).foregroundStyle(.secondary) }
+                if let s = status[.ollama] { statusText(s) }
             }
 
             Section("Per-task routing") {
@@ -148,26 +239,49 @@ struct ModelsSettingsTab: View {
                 Text("Route cheap/fast models to detection and summaries, a strong model to planning and code edits. Models are listed live from each provider — nothing is hard-coded.")
                     .font(.caption).foregroundStyle(.secondary)
             }
+
+            Section("Verify") {
+                HStack {
+                    Button("Send test message through each route") { testRoutes() }
+                        .disabled(testingRoutes)
+                    if testingRoutes { ProgressView().controlSize(.small) }
+                }
+                ForEach(LLMTask.allCases, id: \.self) { task in
+                    if let result = routeTestResults[task] {
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text(task.displayName).font(.caption.weight(.semibold))
+                            Text(result)
+                                .font(.system(.caption2, design: .monospaced))
+                                .foregroundStyle(result.hasPrefix("✓") ? Color.green : Color.orange)
+                                .textSelection(.enabled)
+                        }
+                    }
+                }
+                Text("If a call fails mid-call, the full API error appears here and in the menu-bar popover — no more truncated messages.")
+                    .font(.caption).foregroundStyle(.secondary)
+            }
         }
         .formStyle(.grouped)
         .padding()
     }
 
+    private func statusText(_ s: String) -> some View {
+        Text(s).font(.caption)
+            .foregroundStyle(s.hasPrefix("✓") ? Color.green : Color.orange)
+            .textSelection(.enabled)
+    }
+
     private func providerRow(_ provider: ProviderID, keychainKey: KeychainStore.Key) -> some View {
         VStack(alignment: .leading, spacing: 4) {
-            HStack {
-                SecureField("\(provider.displayName) API key",
-                            text: Binding(get: { keys[provider] ?? "" },
-                                          set: { keys[provider] = $0 }))
-                Button("Validate") {
-                    KeychainStore.shared.set(keys[provider] ?? "", for: keychainKey)
-                    loadModels(for: provider)
-                }
+            SecretField(label: "\(provider.displayName) API key",
+                        text: Binding(get: { keys[provider] ?? "" },
+                                      set: { keys[provider] = $0 }),
+                        saved: Binding(get: { keySaved[provider] ?? false },
+                                       set: { keySaved[provider] = $0 })) {
+                KeychainStore.shared.set(keys[provider] ?? "", for: keychainKey)
+                loadModels(for: provider)
             }
-            if let s = status[provider] {
-                Text(s).font(.caption)
-                    .foregroundStyle(s.hasPrefix("✓") ? Color.green : Color.orange)
-            }
+            if let s = status[provider] { statusText(s) }
         }
     }
 
@@ -187,7 +301,6 @@ struct ModelsSettingsTab: View {
                     ForEach(models[provider] ?? []) { m in
                         Text(m.displayName).tag(m.id)
                     }
-                    // Keep a manually-set model visible even before listing.
                     if let current = settings.routes[task]?.model, !current.isEmpty,
                        !(models[provider] ?? []).contains(where: { $0.id == current }) {
                         Text(current).tag(current)
@@ -232,6 +345,31 @@ struct ModelsSettingsTab: View {
             }
         }
     }
+
+    /// End-to-end verification: a real (tiny) completion through each
+    /// configured route, surfacing the FULL error on failure.
+    private func testRoutes() {
+        testingRoutes = true
+        routeTestResults = [:]
+        Task {
+            defer { testingRoutes = false }
+            for task in LLMTask.allCases {
+                guard settings.routes[task] != nil else {
+                    routeTestResults[task] = "no model configured"
+                    continue
+                }
+                do {
+                    let response = try await app.router.complete(task: task, LLMRequest(
+                        model: "",
+                        messages: [ChatMessage(role: .user, content: "Reply with exactly: OK")],
+                        maxTokens: 16))
+                    routeTestResults[task] = "✓ \(response.model): \(response.text.prefix(40))"
+                } catch {
+                    routeTestResults[task] = Redactor.redact(error.localizedDescription)
+                }
+            }
+        }
+    }
 }
 
 // MARK: - Integrations
@@ -239,13 +377,22 @@ struct ModelsSettingsTab: View {
 struct IntegrationsSettingsTab: View {
     @EnvironmentObject var app: AppState
     @EnvironmentObject var settings: SettingsStore
-    @State private var github = KeychainStore.shared.get(.githubToken) ?? ""
-    @State private var slack = KeychainStore.shared.get(.slackUserToken) ?? ""
-    @State private var linear = KeychainStore.shared.get(.linearAPIKey) ?? ""
-    @State private var smtpPassword = KeychainStore.shared.get(.smtpPassword) ?? ""
-    @State private var gmailToken = KeychainStore.shared.get(.gmailAccessToken) ?? ""
+
+    @State private var github = ""
+    @State private var githubSaved = KeychainStore.shared.get(.githubToken) != nil
+    @State private var slack = ""
+    @State private var slackSaved = KeychainStore.shared.get(.slackUserToken) != nil
+    @State private var linear = ""
+    @State private var linearSaved = KeychainStore.shared.get(.linearAPIKey) != nil
+    @State private var smtpPassword = ""
+    @State private var smtpSaved = KeychainStore.shared.get(.smtpPassword) != nil
+    @State private var gmailToken = ""
+    @State private var gmailSaved = KeychainStore.shared.get(.gmailAccessToken) != nil
+
     @State private var health: [IntegrationID: IntegrationHealth] = [:]
+    @State private var checking = false
     @State private var manifestSecrets: [String: String] = [:]
+    @State private var manifestSaved: [String: Bool] = [:]
     @State private var mcpServers = MCPServerConfig.loadAll()
     @State private var newMCPName = ""
     @State private var newMCPCommand = ""
@@ -253,20 +400,26 @@ struct IntegrationsSettingsTab: View {
     var body: some View {
         Form {
             Section("GitHub — fine-grained PAT (repo contents + pull requests)") {
-                SecureField("Personal access token", text: $github)
-                    .onChange(of: github) { _, v in KeychainStore.shared.set(v, for: .githubToken) }
+                SecretField(label: "Personal access token", text: $github, saved: $githubSaved) {
+                    KeychainStore.shared.set(github, for: .githubToken)
+                    check(.github)
+                }
                 TextField("Default repo (owner/name)", text: $settings.githubDefaultRepo)
                 healthRow(.github)
             }
             Section("Slack — user token (xoxp-)") {
-                SecureField("User OAuth token", text: $slack)
-                    .onChange(of: slack) { _, v in KeychainStore.shared.set(v, for: .slackUserToken) }
+                SecretField(label: "User OAuth token", text: $slack, saved: $slackSaved) {
+                    KeychainStore.shared.set(slack, for: .slackUserToken)
+                    check(.slack)
+                }
                 TextField("Default channel (#name)", text: $settings.slackDefaultChannel)
                 healthRow(.slack)
             }
             Section("Linear — personal API key") {
-                SecureField("API key (lin_api_…)", text: $linear)
-                    .onChange(of: linear) { _, v in KeychainStore.shared.set(v, for: .linearAPIKey) }
+                SecretField(label: "API key (lin_api_…)", text: $linear, saved: $linearSaved) {
+                    KeychainStore.shared.set(linear, for: .linearAPIKey)
+                    check(.linear)
+                }
                 TextField("Default team key (e.g. ENG)", text: $settings.linearTeamKey)
                 healthRow(.linear)
             }
@@ -278,16 +431,21 @@ struct IntegrationsSettingsTab: View {
                 if settings.emailBackend == .smtp {
                     TextField("SMTP host (SSL, port 465)", text: $settings.smtpHost)
                     TextField("SMTP username", text: $settings.smtpUsername)
-                    SecureField("App password", text: $smtpPassword)
-                        .onChange(of: smtpPassword) { _, v in KeychainStore.shared.set(v, for: .smtpPassword) }
+                    SecretField(label: "App password", text: $smtpPassword, saved: $smtpSaved) {
+                        KeychainStore.shared.set(smtpPassword, for: .smtpPassword)
+                        check(.email)
+                    }
                 } else {
-                    SecureField("Gmail OAuth access token", text: $gmailToken)
-                        .onChange(of: gmailToken) { _, v in KeychainStore.shared.set(v, for: .gmailAccessToken) }
+                    SecretField(label: "Gmail OAuth access token", text: $gmailToken, saved: $gmailSaved) {
+                        KeychainStore.shared.set(gmailToken, for: .gmailAccessToken)
+                        check(.email)
+                    }
                     Text("Paste a token with gmail.send scope (full OAuth flow ships in Phase 5).")
                         .font(.caption).foregroundStyle(.secondary)
                 }
                 healthRow(.email)
             }
+
             Section("Manifest integrations (drop a JSON file — no code needed)") {
                 ForEach(manifestEntries, id: \.id) { entry in
                     manifestRow(entry)
@@ -335,40 +493,15 @@ struct IntegrationsSettingsTab: View {
             }
 
             Section {
-                Button("Run health checks") { runHealthChecks() }
+                HStack {
+                    Button("Test all connections") { checkAll() }
+                        .disabled(checking)
+                    if checking { ProgressView().controlSize(.small) }
+                }
             }
         }
         .formStyle(.grouped)
         .padding()
-    }
-
-    // MARK: Dynamic integrations
-
-    private var manifestEntries: [IntegrationRegistry.KnownIntegration] {
-        IntegrationRegistry.shared.known().filter { $0.kind == .manifest }
-    }
-
-    private func manifestRow(_ entry: IntegrationRegistry.KnownIntegration) -> some View {
-        HStack {
-            VStack(alignment: .leading, spacing: 1) {
-                Text(entry.id.displayName)
-                if let hint = entry.authHint {
-                    Text(hint).font(.caption2).foregroundStyle(.tertiary)
-                }
-            }
-            Spacer()
-            SecureField("API key / token",
-                        text: Binding(
-                            get: { manifestSecrets[entry.id.rawValue] ?? (entry.configured ? "••••••••" : "") },
-                            set: { manifestSecrets[entry.id.rawValue] = $0 }))
-                .frame(width: 220)
-            Button("Save") {
-                if let secret = manifestSecrets[entry.id.rawValue], !secret.isEmpty, !secret.hasPrefix("•") {
-                    KeychainStore.shared.setSecret(secret, forIntegration: entry.id.rawValue)
-                }
-            }
-            healthRow(entry.id)
-        }
     }
 
     private func healthRow(_ id: IntegrationID) -> some View {
@@ -377,18 +510,57 @@ struct IntegrationsSettingsTab: View {
                 Label(h.message, systemImage: h.ok ? "checkmark.circle.fill" : "xmark.circle.fill")
                     .font(.caption)
                     .foregroundStyle(h.ok ? Color.green : Color.red)
+                    .textSelection(.enabled)
             }
         }
     }
 
-    private func runHealthChecks() {
+    private var manifestEntries: [IntegrationRegistry.KnownIntegration] {
+        IntegrationRegistry.shared.known().filter { $0.kind == .manifest }
+    }
+
+    private func manifestRow(_ entry: IntegrationRegistry.KnownIntegration) -> some View {
+        VStack(alignment: .leading, spacing: 4) {
+            HStack {
+                Text(entry.id.displayName).font(.callout.weight(.medium))
+                if let hint = entry.authHint {
+                    Text(hint).font(.caption2).foregroundStyle(.tertiary)
+                }
+            }
+            SecretField(label: "API key / token",
+                        text: Binding(get: { manifestSecrets[entry.id.rawValue] ?? "" },
+                                      set: { manifestSecrets[entry.id.rawValue] = $0 }),
+                        saved: Binding(get: { manifestSaved[entry.id.rawValue] ?? entry.configured },
+                                       set: { manifestSaved[entry.id.rawValue] = $0 })) {
+                if let secret = manifestSecrets[entry.id.rawValue], !secret.isEmpty {
+                    KeychainStore.shared.setSecret(secret, forIntegration: entry.id.rawValue)
+                    check(entry.id)
+                }
+            }
+            healthRow(entry.id)
+        }
+    }
+
+    private func check(_ id: IntegrationID) {
+        Task {
+            if let integration = await app.executor.integrations()[id] {
+                health[id] = await integration.healthCheck()
+            } else {
+                health[id] = IntegrationHealth(ok: false, message: "Not configured yet")
+            }
+        }
+    }
+
+    private func checkAll() {
+        checking = true
         Task {
             health = await app.executor.healthChecks()
+            checking = false
         }
     }
 }
 
-// MARK: - Data (export / erase, spec §4.9)
+// MARK: - Data (export / erase / error log)
 
 struct DataSettingsTab: View {
     @EnvironmentObject var app: AppState
@@ -401,6 +573,20 @@ struct DataSettingsTab: View {
                 Text("Transcripts, decisions, actions, and metrics live in a local SQLite database. They never leave this Mac except as LLM/STT payloads you explicitly configured.")
                     .font(.caption).foregroundStyle(.secondary)
                 LabeledContent("Database", value: AppPaths.database.path)
+            }
+            if !app.errorLog.isEmpty {
+                Section("Error log (this session)") {
+                    ForEach(app.errorLog) { entry in
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text(entry.at.formatted(date: .omitted, time: .standard))
+                                .font(.caption2).foregroundStyle(.tertiary)
+                            Text(entry.message)
+                                .font(.system(.caption2, design: .monospaced))
+                                .textSelection(.enabled)
+                        }
+                    }
+                    Button("Clear error log") { app.clearErrors() }
+                }
             }
             Section {
                 Button("Export all data (JSON)…") { exportJSON() }
