@@ -53,7 +53,10 @@ struct LLMRequest: Sendable {
     var tools: [ToolSpec] = []
     var toolChoice: ToolChoice = .auto
     var maxTokens: Int = 2048
-    var temperature: Double = 0.0
+    /// Optional — newer Claude models (Opus 4.7+, Sonnet 5, Fable 5) reject
+    /// the temperature parameter with HTTP 400 ("`temperature` is deprecated
+    /// for this model"), so adapters must OMIT it unless explicitly set.
+    var temperature: Double?
 }
 
 struct Usage: Codable, Sendable {

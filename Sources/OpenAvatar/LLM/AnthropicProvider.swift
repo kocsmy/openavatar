@@ -17,9 +17,13 @@ struct AnthropicProvider: LLMProvider {
         var body: [String: JSONValue] = [
             "model": .string(req.model),
             "max_tokens": .number(Double(req.maxTokens)),
-            "temperature": .number(req.temperature),
             "messages": .array(req.messages.compactMap(encodeMessage))
         ]
+        // Only send temperature when explicitly requested — newer Claude
+        // models return 400 if it is present at all.
+        if let temperature = req.temperature {
+            body["temperature"] = .number(temperature)
+        }
         if !req.system.isEmpty { body["system"] = .string(req.system) }
         if !req.tools.isEmpty {
             body["tools"] = .array(req.tools.map { tool in

@@ -25,9 +25,11 @@ struct OpenAIProvider: LLMProvider {
         var body: [String: JSONValue] = [
             "model": .string(req.model),
             "messages": .array(messages),
-            "max_tokens": .number(Double(req.maxTokens)),
-            "temperature": .number(req.temperature)
+            "max_tokens": .number(Double(req.maxTokens))
         ]
+        if let temperature = req.temperature {
+            body["temperature"] = .number(temperature)
+        }
         if !req.tools.isEmpty {
             body["tools"] = .array(req.tools.map { tool in
                 .object(["type": "function", "function": .object([

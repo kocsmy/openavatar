@@ -126,6 +126,24 @@ final class LLMContractTests: XCTestCase {
         XCTAssertEqual(response.usage.outputTokens, 9)
     }
 
+    // MARK: Temperature handling (newer Claude models 400 if it is sent)
+
+    func testTemperatureOmittedByDefaultOnAllProviders() {
+        let req = LLMRequest(model: "m",
+                             messages: [ChatMessage(role: .user, content: "hi")])
+        XCTAssertNil(AnthropicProvider.encode(req)["temperature"])
+        XCTAssertNil(OpenAIProvider.encode(req)["temperature"])
+        XCTAssertNil(GeminiProvider.encode(req)["generationConfig"]?["temperature"])
+        XCTAssertNil(OllamaProvider.encode(req)["options"]?["temperature"])
+    }
+
+    func testTemperatureIncludedWhenExplicitlySet() {
+        XCTAssertEqual(AnthropicProvider.encode(request)["temperature"]?.numberValue, 0.2)
+        XCTAssertEqual(OpenAIProvider.encode(request)["temperature"]?.numberValue, 0.2)
+        XCTAssertEqual(GeminiProvider.encode(request)["generationConfig"]?["temperature"]?.numberValue, 0.2)
+        XCTAssertEqual(OllamaProvider.encode(request)["options"]?["temperature"]?.numberValue, 0.2)
+    }
+
     // MARK: Cross-provider invariant
 
     func testAllProvidersProduceIdenticalNormalizedToolCall() throws {
