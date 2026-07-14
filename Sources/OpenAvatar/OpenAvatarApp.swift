@@ -36,6 +36,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     func applicationDidFinishLaunching(_ notification: Notification) {
         // Menu-bar only: no Dock icon.
         NSApp.setActivationPolicy(.accessory)
+        // Start the Sparkle updater (background checks + relaunch prompt).
+        _ = UpdateManager.shared
         if !SettingsStore.shared.onboardingComplete {
             WindowManager.shared.showOnboarding()
         }

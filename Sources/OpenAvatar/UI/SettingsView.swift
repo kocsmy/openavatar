@@ -53,6 +53,12 @@ struct GeneralSettingsTab: View {
                 Text("Decisions below this confidence are greyed out and never auto-executed.")
                     .font(.caption).foregroundStyle(.secondary)
             }
+            Section("Updates") {
+                LabeledContent("Version", value: UpdateManager.shared.currentVersion)
+                Button("Check for updates now") { UpdateManager.shared.checkForUpdates() }
+                Text("Updates download automatically in the background; you'll be asked to relaunch when one is ready.")
+                    .font(.caption).foregroundStyle(.secondary)
+            }
             Section {
                 Button("Re-run onboarding") {
 #if canImport(AppKit)
