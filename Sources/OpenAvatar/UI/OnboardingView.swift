@@ -226,6 +226,7 @@ private struct PermissionsStep: View {
 
 private struct TranscriptionStep: View {
     @EnvironmentObject var settings: SettingsStore
+    @StateObject private var whisperSetup = WhisperSetupService()
     @State private var sttKey = KeychainStore.shared.get(.cloudSTTAPIKey) ?? ""
 
     var body: some View {
@@ -242,12 +243,8 @@ private struct TranscriptionStep: View {
 
                 if settings.transcriptionMode == .local {
                     GroupBox {
-                        VStack(alignment: .leading, spacing: 6) {
-                            Text("Needs whisper.cpp: `brew install whisper-cpp`, plus a model file. Paths can be adjusted later in Settings → Transcription.")
-                                .font(.callout)
-                            TextField("whisper-cli path", text: $settings.whisperCLIPath)
-                            TextField("Model path (.bin)", text: $settings.whisperModelPath)
-                        }.padding(6)
+                        WhisperSetupView(service: whisperSetup)
+                            .padding(6)
                     }
                 } else {
                     GroupBox {

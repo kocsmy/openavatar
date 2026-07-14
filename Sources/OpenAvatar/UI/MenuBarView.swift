@@ -12,10 +12,44 @@ struct MenuBarView: View {
             Divider()
 
             if let error = app.lastError {
-                Label(error, systemImage: "exclamationmark.triangle.fill")
-                    .font(.caption)
-                    .foregroundStyle(.orange)
-                    .lineLimit(3)
+                VStack(alignment: .leading, spacing: 4) {
+                    HStack {
+                        Label("Something went wrong", systemImage: "exclamationmark.triangle.fill")
+                            .font(.caption.weight(.semibold))
+                            .foregroundStyle(.orange)
+                        Spacer()
+                        Button {
+#if canImport(AppKit)
+                            NSPasteboard.general.clearContents()
+                            NSPasteboard.general.setString(error, forType: .string)
+#endif
+                        } label: { Image(systemName: "doc.on.doc") }
+                            .buttonStyle(.borderless)
+                            .help("Copy full error")
+                        Button {
+                            app.clearErrors()
+                        } label: { Image(systemName: "xmark.circle") }
+                            .buttonStyle(.borderless)
+                            .help("Dismiss")
+                    }
+                    // Full error, selectable and scrollable — never truncated
+                    // to an unreadable single line.
+                    ScrollView {
+                        Text(error)
+                            .font(.system(.caption2, design: .monospaced))
+                            .foregroundStyle(.orange)
+                            .textSelection(.enabled)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                    }
+                    .frame(maxHeight: 130)
+                    .padding(6)
+                    .background(.orange.opacity(0.08), in: RoundedRectangle(cornerRadius: 6))
+                    if app.errorLog.count > 1 {
+                        Text("\(app.errorLog.count) errors this session — full log in Settings → Data")
+                            .font(.caption2)
+                            .foregroundStyle(.tertiary)
+                    }
+                }
             }
 
             if !app.proactiveSuggestions.isEmpty {
@@ -79,7 +113,7 @@ struct MenuBarView: View {
             footer
         }
         .padding(12)
-        .frame(width: 360)
+        .frame(width: 420)
     }
 
     private var header: some View {
