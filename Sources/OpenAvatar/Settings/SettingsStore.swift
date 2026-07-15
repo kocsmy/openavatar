@@ -74,6 +74,8 @@ final class SettingsStore: ObservableObject {
 
     // MARK: Detection
     @Published var confidenceThreshold: Double { didSet { defaults.set(confidenceThreshold, forKey: "confidenceThreshold") } }
+    /// Capture time-referenced follow-ups from calls and offer reminders for them.
+    @Published var followUpsEnabled: Bool { didSet { defaults.set(followUpsEnabled, forKey: "followUpsEnabled") } }
 
     // MARK: Trust — changes only via explicit user action (spec §5.4)
     @Published var trustMatrix: TrustMatrix { didSet { persistTrustMatrix() } }
@@ -123,6 +125,7 @@ final class SettingsStore: ObservableObject {
 
         let threshold = defaults.object(forKey: "confidenceThreshold") as? Double
         confidenceThreshold = threshold ?? 0.6
+        followUpsEnabled = (defaults.object(forKey: "followUpsEnabled") as? Bool) ?? true
 
         trustMatrix = Self.loadTrustMatrix(from: defaults)
 

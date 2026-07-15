@@ -49,6 +49,9 @@ final class AppState: ObservableObject {
     // Calendar context for the current call (who you're talking to).
     @Published var currentEvent: CalendarEvent?
     @Published var callAttendees: [CalendarAttendee] = []
+
+    /// Follow-ups detected on this call, awaiting confirmation in the review.
+    @Published var pendingFollowUps: [FollowUp] = []
     /// Emails already auto-assigned to a voice this call (prevents re-prefill).
     private var assignedAttendeeEmails: Set<String> = []
 
@@ -65,12 +68,14 @@ final class AppState: ObservableObject {
     private(set) lazy var trust = TrustPolicyEngine(store: store)
     private(set) lazy var consolidator = MemoryConsolidator(router: router, store: store)
     private(set) lazy var proactive = ProactiveEngine(router: router, store: store)
+    private(set) lazy var followUpExtractor = FollowUpExtractor(router: router, store: store)
 
     private(set) lazy var diarizer = SpeakerDiarizer()
     private lazy var calendar = GoogleCalendarClient(
         tokenProvider: { try await GoogleOAuth.shared.accessToken() })
     private var capture: AudioCaptureService?
     private var currentCallID: UUID?
+    private var currentCallStartedAt: Date?
     private var callDetectorTimer: Timer?
     private let callDetector = CallDetector()
 
@@ -91,10 +96,12 @@ final class AppState: ObservableObject {
         lastError = nil
         liveSegments = []
         detectedDecisions = []
+        pendingFollowUps = []
         assignedAttendeeEmails = []
         do {
             let callID = try store.startCall(app: suggestedCallApp)
             currentCallID = callID
+            currentCallStartedAt = Date()
             let service = AudioCaptureService { [weak self] chunk in
                 Task { @MainActor in
                     self?.handle(chunk: chunk)
@@ -142,6 +149,7 @@ final class AppState: ObservableObject {
         isListening = false
 
         let callID = currentCallID
+        let callStart = currentCallStartedAt
         Task {
             if let callID {
                 // Final detection pass, then open the post-call review sheet.
@@ -150,8 +158,17 @@ final class AppState: ObservableObject {
                 }
                 let summary = detectedDecisions.map(\.summary).joined(separator: "; ")
                 try? store.endCall(callID, summary: summary.isEmpty ? nil : summary)
+
+                // Capture time-referenced follow-ups to confirm in the review.
+                if settings.followUpsEnabled {
+                    if let found = try? await followUpExtractor.extract(
+                        callID: callID, callStart: callStart ?? Date()) {
+                        for f in found { try? store.insertFollowUp(f) }
+                        pendingFollowUps = found
+                    }
+                }
             }
-            if !detectedDecisions.isEmpty {
+            if !detectedDecisions.isEmpty || !pendingFollowUps.isEmpty {
                 showPostCallReview = true
 #if canImport(AppKit)
                 WindowManager.shared.showPostCallReview()
@@ -192,6 +209,57 @@ final class AppState: ObservableObject {
     /// Whether a given call has any detected decisions worth reviewing.
     func hasReviewableDecisions(_ callID: UUID) -> Bool {
         ((try? store.decisions(callID: callID)) ?? []).isEmpty == false
+    }
+
+    // MARK: - Follow-ups (confirm in review → scheduled reminder)
+
+    /// Confirm a suggested follow-up: mark it scheduled and set a local reminder
+    /// for its due time. Requests notification permission the first time.
+    func confirmFollowUp(_ followUp: FollowUp) {
+        try? store.updateFollowUpStatus(id: followUp.id, status: .scheduled)
+        pendingFollowUps.removeAll { $0.id == followUp.id }
+        Task {
+            await NotificationScheduler.requestAuthorization()
+            var scheduled = followUp
+            scheduled.status = .scheduled
+            NotificationScheduler.schedule(scheduled)
+        }
+    }
+
+    func dismissFollowUp(_ followUp: FollowUp) {
+        try? store.updateFollowUpStatus(id: followUp.id, status: .dismissed)
+        pendingFollowUps.removeAll { $0.id == followUp.id }
+        NotificationScheduler.cancel(id: followUp.id)
+    }
+
+    func markFollowUpDone(_ followUp: FollowUp) {
+        try? store.updateFollowUpStatus(id: followUp.id, status: .done)
+        NotificationScheduler.cancel(id: followUp.id)
+    }
+
+    /// Push a scheduled reminder out by a number of days (default 1) and reschedule.
+    func snoozeFollowUp(_ followUp: FollowUp, byDays days: Int = 1) {
+        let base = max(followUp.dueAt, Date())
+        let newDue = Calendar.current.date(byAdding: .day, value: days, to: base) ?? base
+        try? store.updateFollowUpDue(id: followUp.id, dueAt: newDue)
+        var updated = followUp
+        updated.dueAt = newDue
+        updated.status = .scheduled
+        NotificationScheduler.schedule(updated)
+    }
+
+    func deleteFollowUp(_ followUp: FollowUp) {
+        try? store.deleteFollowUp(id: followUp.id)
+        NotificationScheduler.cancel(id: followUp.id)
+        pendingFollowUps.removeAll { $0.id == followUp.id }
+    }
+
+    func scheduledFollowUps() -> [FollowUp] {
+        (try? store.followUps(statuses: [.scheduled])) ?? []
+    }
+
+    func completedFollowUps() -> [FollowUp] {
+        (try? store.followUps(statuses: [.done])) ?? []
     }
 
     // MARK: - Proactive suggestions (always Ask-first)
