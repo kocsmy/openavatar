@@ -28,6 +28,10 @@
     <string>OpenAvatar transcribes your side of calls locally to detect action items. Nothing is recorded unless you switch listening on, and the menu-bar icon always shows recording state.</string>
     <key>NSAudioCaptureUsageDescription</key>
     <string>OpenAvatar captures call audio (the other participants) locally to detect decisions and action items. It never joins your calls and never records while the indicator is off.</string>
+    <key>GoogleOAuthClientID</key>
+    <string></string>
+    <key>GoogleOAuthClientSecret</key>
+    <string></string>
     <key>SUFeedURL</key>
     <string>https://github.com/kocsmy/openavatar/releases/latest/download/appcast.xml</string>
     <key>SUPublicEDKey</key>

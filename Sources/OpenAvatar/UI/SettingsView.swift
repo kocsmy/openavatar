@@ -63,6 +63,14 @@ struct GeneralSettingsTab: View {
                 Text("Updates download automatically in the background; you'll be asked to relaunch when one is ready.")
                     .font(.caption).foregroundStyle(.secondary)
             }
+            Section("About & legal") {
+                Link("Privacy Policy",
+                     destination: URL(string: "https://github.com/kocsmy/openavatar/blob/main/PRIVACY.md")!)
+                Link("Terms of Service",
+                     destination: URL(string: "https://github.com/kocsmy/openavatar/blob/main/TERMS.md")!)
+                Text("Everything runs on your Mac. OpenAvatar has no servers and collects no data — see the policy for details.")
+                    .font(.caption).foregroundStyle(.secondary)
+            }
             Section {
                 Button("Re-run onboarding") {
 #if canImport(AppKit)
@@ -235,11 +243,13 @@ struct CalendarSettingsTab: View {
     @State private var status: String?
     @State private var eventPreview: String?
 
+    private let hasBuiltInClient = GoogleOAuth.shared.hasBuiltInClient
+
     var body: some View {
         Form {
             Section("Google Calendar") {
                 Toggle("Identify who's on the call from my calendar", isOn: $settings.calendarEnabled)
-                Text("When you start listening, OpenAvatar looks up the current event and offers each attendee's name to label the voices it hears. On a 1:1 it pre-fills the other person automatically.")
+                Text("When you start listening, OpenAvatar looks up the current event and offers each attendee's name to label the voices it hears. On a 1:1 it pre-fills the other person automatically. Read-only — it never changes your calendar.")
                     .font(.caption).foregroundStyle(.secondary)
             }
 
@@ -274,9 +284,13 @@ struct CalendarSettingsTab: View {
                         if connecting { ProgressView().controlSize(.small) }
                         else { Label("Connect Google Calendar", systemImage: "person.badge.key") }
                     }
+                    .buttonStyle(.borderedProminent)
                     .disabled(connecting || !isConfigured)
-                    if !isConfigured {
-                        Text("Enter your OAuth client ID and secret below first.")
+                    if hasBuiltInClient {
+                        Text("One click — sign in with Google and approve read-only calendar access. Your tokens stay in your Keychain on this Mac.")
+                            .font(.caption).foregroundStyle(.secondary)
+                    } else if !isConfigured {
+                        Text("Add an OAuth client under Advanced first.")
                             .font(.caption).foregroundStyle(.orange)
                     }
                 }
@@ -286,40 +300,55 @@ struct CalendarSettingsTab: View {
                 }
             }
 
-            Section("OAuth credentials (from your Google Cloud project)") {
-                TextField("Client ID", text: $settings.googleClientID)
-                    .textFieldStyle(.roundedBorder)
-                SecretField(label: "Client secret", text: $clientSecret, saved: $clientSecretSaved) {
-                    KeychainStore.shared.set(clientSecret, for: .googleClientSecret)
-                }
-                TextField("My email (excluded from attendee suggestions)", text: $settings.calendarSelfEmail)
-                    .textFieldStyle(.roundedBorder)
-            }
-
-            Section("Setup") {
-                Text("""
-                1. In Google Cloud Console, create an OAuth client of type **Desktop app**.
-                2. Enable the **Google Calendar API** for the project.
-                3. Paste the client ID and client secret above.
-                4. Click Connect and approve read-only calendar access.
-                Tokens are stored in your Keychain; OpenAvatar only ever reads events, never writes.
-                """)
-                .font(.caption).foregroundStyle(.secondary)
-                Button("Open Google Cloud Console") {
-#if canImport(AppKit)
-                    if let url = URL(string: "https://console.cloud.google.com/apis/credentials") {
-                        NSWorkspace.shared.open(url)
+            if hasBuiltInClient {
+                Section {
+                    DisclosureGroup("Advanced — use your own Google app") {
+                        oauthCredentialFields
+                        setupInstructions
                     }
-#endif
                 }
+            } else {
+                Section("OAuth credentials (from your Google Cloud project)") {
+                    oauthCredentialFields
+                }
+                Section("Setup") { setupInstructions }
             }
         }
         .formStyle(.grouped)
         .padding()
     }
 
+    @ViewBuilder private var oauthCredentialFields: some View {
+        TextField("Client ID", text: $settings.googleClientID)
+            .textFieldStyle(.roundedBorder)
+        SecretField(label: "Client secret", text: $clientSecret, saved: $clientSecretSaved) {
+            KeychainStore.shared.set(clientSecret, for: .googleClientSecret)
+        }
+        TextField("My email (auto-filled on connect)", text: $settings.calendarSelfEmail)
+            .textFieldStyle(.roundedBorder)
+    }
+
+    @ViewBuilder private var setupInstructions: some View {
+        Text("""
+        1. In Google Cloud Console, create an OAuth client of type **Desktop app**.
+        2. Enable the **Google Calendar API** for the project.
+        3. Paste the client ID and client secret above.
+        4. Click Connect and approve read-only calendar access.
+        Tokens are stored in your Keychain; OpenAvatar only ever reads events, never writes.
+        """)
+        .font(.caption).foregroundStyle(.secondary)
+        Button("Open Google Cloud Console") {
+#if canImport(AppKit)
+            if let url = URL(string: "https://console.cloud.google.com/apis/credentials") {
+                NSWorkspace.shared.open(url)
+            }
+#endif
+        }
+    }
+
     private var isConfigured: Bool {
-        !settings.googleClientID.trimmingCharacters(in: .whitespaces).isEmpty && clientSecretSaved
+        if hasBuiltInClient { return true }
+        return !settings.googleClientID.trimmingCharacters(in: .whitespaces).isEmpty && clientSecretSaved
     }
 
     private func connect() {
