@@ -324,6 +324,35 @@ final class ContextStore: @unchecked Sendable {
         }
     }
 
+    /// The distinct voices heard on one call (profiles joined through the
+    /// call's segments), in first-heard order. Lets the UI scope speaker
+    /// management to a call while fingerprints stay global.
+    func speakerProfiles(callID: UUID) throws -> [SpeakerProfile] {
+        try dbQueue.read { db in
+            let rows = try Row.fetchAll(db, sql: """
+                SELECT p.id, p.name, p.ordinal, p.embedding, p.sample_count,
+                       p.created_at, p.updated_at
+                FROM speaker_profiles p
+                JOIN (SELECT speaker_id, MIN(t0) AS first_t0 FROM transcript_segments
+                      WHERE call_id = ? AND speaker_id IS NOT NULL
+                      GROUP BY speaker_id) s ON s.speaker_id = p.id
+                ORDER BY s.first_t0
+                """, arguments: [callID.uuidString])
+            return rows.compactMap { row in
+                guard let id = UUID(uuidString: row["id"] as String? ?? ""),
+                      let blob = row["embedding"] as Data? else { return nil }
+                return SpeakerProfile(
+                    id: id,
+                    name: row["name"] as String?,
+                    ordinal: row["ordinal"] as Int? ?? 0,
+                    embedding: SpeakerProfile.decode(blob),
+                    sampleCount: row["sample_count"] as Int? ?? 1,
+                    createdAt: Date(timeIntervalSince1970: row["created_at"] as Double? ?? 0),
+                    updatedAt: Date(timeIntervalSince1970: row["updated_at"] as Double? ?? 0))
+            }
+        }
+    }
+
     /// Next friendly ordinal for a new voice ("Speaker N").
     func nextSpeakerOrdinal() throws -> Int {
         try dbQueue.read { db in

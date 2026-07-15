@@ -225,55 +225,7 @@ enum TranscriptFormatter {
     }
 }
 
-// MARK: - Named voices library (rename / merge any voice, past or present)
-
-/// Lists every stored voice fingerprint with an editable name. Renaming here
-/// relabels that voice everywhere; merging folds one voice into another to fix
-/// a person who was split across several "Speaker N" entries.
-struct SpeakerLibraryView: View {
-    @EnvironmentObject var app: AppState
-    /// Called after a rename/merge so the parent can reload any visible transcript.
-    var onRename: () -> Void = {}
-
-    @State private var profiles: [SpeakerProfile] = []
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 6) {
-            HStack {
-                Text("Named voices").font(.headline)
-                Spacer()
-                Button("Refresh") { load() }.controlSize(.small)
-            }
-            Text("Name a voice once and it's recognized in every call — past transcripts are relabeled too. If one person shows up as several voices, use Merge to combine them.")
-                .font(.caption).foregroundStyle(.secondary)
-
-            if profiles.isEmpty {
-                Text("No voices captured yet. They appear here after a call with per-voice diarization on.")
-                    .font(.caption).foregroundStyle(.tertiary)
-                    .frame(maxWidth: .infinity, minHeight: 40, alignment: .center)
-            } else {
-                ForEach(profiles) { profile in
-                    SpeakerLibraryRow(
-                        profile: profile,
-                        others: profiles.filter { $0.id != profile.id },
-                        onCommit: { newName in
-                            app.renameSpeaker(id: profile.id.uuidString, to: newName)
-                            load(); onRename()
-                        },
-                        onMerge: { targetID in
-                            app.mergeSpeaker(sourceID: profile.id.uuidString, into: targetID.uuidString)
-                            load(); onRename()
-                        })
-                }
-            }
-        }
-        .onAppear { load() }
-    }
-
-    private func load() {
-        profiles = (try? app.store.allSpeakerProfiles()) ?? []
-    }
-}
+// MARK: - Speaker row (rename / merge one voice — used per-call)
 
 struct SpeakerLibraryRow: View {
     let profile: SpeakerProfile
@@ -328,22 +280,27 @@ struct TranscriptsSettingsTab: View {
     @State private var selectedCallID: UUID?
     @State private var segments: [TranscriptSegment] = []
     @State private var message: String?
+    @State private var callSpeakers: [SpeakerProfile] = []
+    @State private var allProfiles: [SpeakerProfile] = []
+    @State private var speakersExpanded = true
 
     private var selectedCall: ContextStore.CallRecord? {
         calls.first { $0.id == selectedCallID }
     }
 
+    /// Refresh the transcript + speaker roster after a rename/merge so changes
+    /// show immediately.
+    private func reload(callID: UUID) {
+        segments = (try? app.store.segments(callID: callID)) ?? []
+        callSpeakers = (try? app.store.speakerProfiles(callID: callID)) ?? []
+        allProfiles = (try? app.store.allSpeakerProfiles()) ?? []
+    }
+
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
             Text("Saved transcripts").font(.headline)
-            Text("Every call is transcribed and stored locally with timestamps. Select a call to read or export it.")
+            Text("Every call is transcribed and stored locally with timestamps. Select a call to read it, name its speakers, or export it.")
                 .font(.caption).foregroundStyle(.secondary)
-
-            SpeakerLibraryView {
-                // Reload the visible transcript so renames show immediately.
-                if let id = selectedCallID { segments = (try? app.store.segments(callID: id)) ?? [] }
-            }
-            Divider()
 
             if calls.isEmpty {
                 ContentUnavailableView("No calls yet", systemImage: "text.quote",
@@ -369,7 +326,38 @@ struct TranscriptsSettingsTab: View {
                     }
                     .tag(call.id)
                 }
-                .frame(height: 150)
+                .frame(height: 130)
+
+                // Speakers scoped to the selected call: verify this call's
+                // diarization at a glance, rename, or merge (merges cross-
+                // reference globally — the fingerprints are shared).
+                if let callID = selectedCallID, !callSpeakers.isEmpty {
+                    DisclosureGroup(isExpanded: $speakersExpanded) {
+                        VStack(alignment: .leading, spacing: 4) {
+                            ForEach(callSpeakers) { profile in
+                                SpeakerLibraryRow(
+                                    profile: profile,
+                                    others: allProfiles.filter { $0.id != profile.id },
+                                    onCommit: { newName in
+                                        app.renameSpeaker(id: profile.id.uuidString, to: newName)
+                                        reload(callID: callID)
+                                    },
+                                    onMerge: { targetID in
+                                        app.mergeSpeaker(sourceID: profile.id.uuidString,
+                                                         into: targetID.uuidString)
+                                        reload(callID: callID)
+                                    })
+                            }
+                            Text("Names are auto-detected from the conversation when possible — fix or clear any guess. Merging folds a duplicate voice into another, across all calls.")
+                                .font(.caption2).foregroundStyle(.tertiary)
+                        }
+                        .padding(.top, 4)
+                    } label: {
+                        Label("Speakers in this call (\(callSpeakers.count))",
+                              systemImage: "person.2")
+                            .font(.callout.weight(.medium))
+                    }
+                }
 
                 Divider()
 
@@ -426,7 +414,7 @@ struct TranscriptsSettingsTab: View {
         .padding()
         .onAppear { load() }
         .onChange(of: selectedCallID) { _, callID in
-            segments = callID.flatMap { try? app.store.segments(callID: $0) } ?? []
+            if let callID { reload(callID: callID) } else { segments = []; callSpeakers = [] }
         }
     }
 
@@ -434,8 +422,8 @@ struct TranscriptsSettingsTab: View {
         calls = (try? app.store.listCalls()) ?? []
         if selectedCallID == nil, let first = calls.first {
             selectedCallID = first.id
-            segments = (try? app.store.segments(callID: first.id)) ?? []
         }
+        if let id = selectedCallID { reload(callID: id) }
     }
 
     private func wallClock(_ t: TimeInterval) -> String {

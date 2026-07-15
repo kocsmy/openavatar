@@ -17,20 +17,6 @@ struct MenuBarView: View {
 
     @Environment(\.openSettings) private var openSettings
 
-    /// Does the actions content need to scroll? Decided from item counts (a pure,
-    /// unit-tested estimate) rather than live measurement — the measured-height
-    /// ScrollView regressed and left a huge blank area under short content.
-    private var actionsMetrics: PopoverLayout.Metrics {
-        PopoverLayout.Metrics(
-            hasCallSuggestion: app.suggestedCallApp != nil && !app.isListening,
-            hasError: app.lastError != nil,
-            suggestions: app.proactiveSuggestions.count,
-            approvals: app.pendingApprovals.count,
-            detected: app.detectedDecisions.count,
-            executed: app.executedActions.count,
-            isEmpty: isEmptyState)
-    }
-
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             header
@@ -54,7 +40,7 @@ struct MenuBarView: View {
             Group {
                 if tab == .transcript {
                     LiveTranscriptView().padding(14)
-                } else if actionsMetrics.needsScroll {
+                } else if popoverContent.needsScroll {
                     ScrollView { actionsContent.padding(14) }
                         .frame(height: PopoverLayout.maxContentHeight)
                 } else {
@@ -73,55 +59,53 @@ struct MenuBarView: View {
 
     // MARK: Actions tab
 
+    /// Single source of truth for what the Actions tab shows (see PopoverContent).
+    var popoverContent: PopoverContent {
+        PopoverContent(
+            hasCallSuggestion: app.suggestedCallApp != nil && !app.isListening,
+            hasError: app.lastError != nil,
+            suggestions: app.proactiveSuggestions.count,
+            approvals: app.pendingApprovals.count,
+            detected: app.detectedDecisions.count,
+            executed: app.executedActions.count)
+    }
+
     @ViewBuilder private var actionsContent: some View {
         VStack(alignment: .leading, spacing: 14) {
-            callSuggestionBanner
-
-            if let error = app.lastError {
-                errorCard(error)
+            ForEach(Array(popoverContent.sections.enumerated()), id: \.offset) { _, kind in
+                sectionView(kind)
             }
-
-            if !app.proactiveSuggestions.isEmpty {
-                section("Suggestions") {
-                    boundedRows(app.proactiveSuggestions, rowHeight: 72) { suggestion in
-                        suggestionRow(suggestion)
-                    }
-                }
-            }
-
-            if !app.pendingApprovals.isEmpty {
-                section("Waiting for your approval") {
-                    ForEach(app.pendingApprovals) { approval in
-                        ApprovalCard(approval: approval)
-                    }
-                }
-            }
-
-            if !app.detectedDecisions.isEmpty {
-                section("Detected this call") {
-                    boundedRows(app.detectedDecisions, rowHeight: 74) { decision in
-                        DecisionRow(decision: decision)
-                    }
-                }
-            }
-
-            if !app.executedActions.isEmpty {
-                section("Executed") {
-                    ForEach(app.executedActions.prefix(5)) { action in
-                        ExecutedActionRow(action: action)
-                    }
-                }
-            }
-
-            if isEmptyState { emptyState }
         }
     }
 
-    private var isEmptyState: Bool {
-        app.detectedDecisions.isEmpty && app.pendingApprovals.isEmpty
-            && app.executedActions.isEmpty && app.lastError == nil
-            && app.proactiveSuggestions.isEmpty
+    @ViewBuilder private func sectionView(_ kind: PopoverSection) -> some View {
+        switch kind {
+        case .callSuggestion:
+            callSuggestionBanner
+        case .error:
+            if let error = app.lastError { errorCard(error) }
+        case .suggestions:
+            section("Suggestions") {
+                boundedRows(app.proactiveSuggestions, rowHeight: 72) { suggestionRow($0) }
+            }
+        case .approvals:
+            section("Waiting for your approval") {
+                ForEach(app.pendingApprovals) { ApprovalCard(approval: $0) }
+            }
+        case .detected:
+            section("Detected this call") {
+                boundedRows(app.detectedDecisions, rowHeight: 74) { DecisionRow(decision: $0) }
+            }
+        case .executed:
+            section("Executed") {
+                ForEach(app.executedActions.prefix(5)) { ExecutedActionRow(action: $0) }
+            }
+        case .empty:
+            emptyState
+        }
     }
+
+    private var isEmptyState: Bool { popoverContent.isEmpty }
 
     @ViewBuilder private var callSuggestionBanner: some View {
         if let suggestion = app.suggestedCallApp, !app.isListening {
@@ -368,6 +352,40 @@ enum PopoverLayout {
         }
 
         var needsScroll: Bool { estimatedHeight > PopoverLayout.maxContentHeight }
+    }
+}
+
+/// The ordered sections the Actions tab renders, in presentation order.
+enum PopoverSection: String, Equatable {
+    case callSuggestion, error, suggestions, approvals, detected, executed, empty
+}
+
+/// Pure view-model for the Actions tab: which sections show, whether the empty
+/// state applies, and whether the content must scroll. The view renders straight
+/// from this, so `PopoverContentTests` snapshots exactly what the user sees.
+struct PopoverContent: Equatable {
+    let sections: [PopoverSection]
+    let isEmpty: Bool
+    let needsScroll: Bool
+
+    init(hasCallSuggestion: Bool, hasError: Bool,
+         suggestions: Int, approvals: Int, detected: Int, executed: Int) {
+        let empty = !hasError && suggestions == 0 && approvals == 0
+            && detected == 0 && executed == 0
+        var s: [PopoverSection] = []
+        if hasCallSuggestion { s.append(.callSuggestion) }
+        if hasError { s.append(.error) }
+        if suggestions > 0 { s.append(.suggestions) }
+        if approvals > 0 { s.append(.approvals) }
+        if detected > 0 { s.append(.detected) }
+        if executed > 0 { s.append(.executed) }
+        if empty { s.append(.empty) }
+        self.sections = s
+        self.isEmpty = empty
+        self.needsScroll = PopoverLayout.Metrics(
+            hasCallSuggestion: hasCallSuggestion, hasError: hasError,
+            suggestions: suggestions, approvals: approvals,
+            detected: detected, executed: executed, isEmpty: empty).needsScroll
     }
 }
 

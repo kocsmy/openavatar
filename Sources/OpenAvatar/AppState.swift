@@ -69,6 +69,7 @@ final class AppState: ObservableObject {
     private(set) lazy var consolidator = MemoryConsolidator(router: router, store: store)
     private(set) lazy var proactive = ProactiveEngine(router: router, store: store)
     private(set) lazy var followUpExtractor = FollowUpExtractor(router: router, store: store)
+    private(set) lazy var nameGuesser = SpeakerNameGuesser(router: router, store: store)
 
     private(set) lazy var diarizer = SpeakerDiarizer()
     private lazy var calendar = GoogleCalendarClient(
@@ -165,6 +166,22 @@ final class AppState: ObservableObject {
                         callID: callID, callStart: callStart ?? Date()) {
                         for f in found { try? store.insertFollowUp(f) }
                         pendingFollowUps = found
+                    }
+                }
+
+                // Auto-name still-unnamed voices from transcript evidence
+                // ("this is Alexa", "thanks, Vasilis"). Manual names always win;
+                // best-effort and fully editable afterwards.
+                if settings.diarizationEnabled {
+                    if let applied = try? await nameGuesser.guessAndApply(callID: callID),
+                       !applied.isEmpty {
+                        for guess in applied {
+                            let sid = guess.profileID.uuidString
+                            for i in liveSegments.indices where liveSegments[i].speakerID == sid {
+                                liveSegments[i].speaker = guess.name
+                            }
+                        }
+                        await diarizer.reset()
                     }
                 }
             }
