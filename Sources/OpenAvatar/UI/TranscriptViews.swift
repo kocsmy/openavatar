@@ -395,6 +395,15 @@ struct TranscriptsSettingsTab: View {
                 }
 
                 HStack {
+                    Button {
+                        if let id = selectedCallID { app.reviewPastCall(id) }
+                    } label: { Label("Open call review", systemImage: "checklist") }
+                        .disabled(selectedCallID == nil
+                                  || app.isListening
+                                  || !(selectedCallID.map { app.hasReviewableDecisions($0) } ?? false))
+                        .help(app.isListening
+                              ? "Available when you're not in a live call"
+                              : "Re-open the action-item review for this call")
                     Button("Export as Markdown…") { exportMarkdown() }
                         .disabled(segments.isEmpty)
                     Button {

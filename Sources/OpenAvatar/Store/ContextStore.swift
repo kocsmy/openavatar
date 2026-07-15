@@ -377,6 +377,36 @@ final class ContextStore: @unchecked Sendable {
         try MetricsRecorder(store: self).bump("decisions_detected")
     }
 
+    /// All decisions detected on one call, oldest first — used to re-open the
+    /// post-call review from history.
+    func decisions(callID: UUID) throws -> [Decision] {
+        try dbQueue.read { db in
+            let rows = try Row.fetchAll(db, sql: """
+                SELECT id, call_id, quote, intent, summary, assignee_hint, confidence,
+                       addressed_to_assistant, source, status, dismiss_reason, created_at
+                FROM decisions WHERE call_id = ? ORDER BY created_at
+                """, arguments: [callID.uuidString])
+            return rows.compactMap { row in
+                guard let id = UUID(uuidString: row["id"] as String? ?? ""),
+                      let intent = DecisionIntent(rawValue: row["intent"] as String? ?? ""),
+                      let status = DecisionStatus(rawValue: row["status"] as String? ?? "") else { return nil }
+                return Decision(
+                    id: id,
+                    callID: (row["call_id"] as String?).flatMap { UUID(uuidString: $0) },
+                    quote: row["quote"] as String? ?? "",
+                    intent: intent,
+                    summary: row["summary"] as String? ?? "",
+                    assigneeHint: row["assignee_hint"] as String?,
+                    confidence: row["confidence"] as Double? ?? 0,
+                    addressedToAssistant: (row["addressed_to_assistant"] as Int? ?? 0) != 0,
+                    source: AudioSource(rawValue: row["source"] as String? ?? "mic") ?? .mic,
+                    status: status,
+                    dismissReason: (row["dismiss_reason"] as String?).flatMap { DismissReason(rawValue: $0) },
+                    createdAt: Date(timeIntervalSince1970: row["created_at"] as Double? ?? 0))
+            }
+        }
+    }
+
     func updateDecisionStatus(_ id: UUID, status: DecisionStatus, dismissReason: DismissReason? = nil) throws {
         try dbQueue.write { db in
             try db.execute(

@@ -69,6 +69,16 @@ enum DismissReason: String, Codable, CaseIterable, Sendable {
     case notActionable = "not_actionable"
     case duplicate
     case other
+
+    var displayName: String {
+        switch self {
+        case .wrongTranscription: return "Wrong transcription"
+        case .wrongIntent: return "Wrong intent"
+        case .notActionable: return "Not actionable"
+        case .duplicate: return "Duplicate"
+        case .other: return "Other reason"
+        }
+    }
 }
 
 struct Decision: Codable, Identifiable, Sendable {
