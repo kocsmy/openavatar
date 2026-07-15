@@ -12,12 +12,19 @@ struct LiveTranscriptView: View {
         VStack(alignment: .leading, spacing: 6) {
             SpeakerRosterView()
             if app.liveSegments.isEmpty {
-                Text(app.isListening
-                     ? "Listening — the transcript appears here as people speak…"
-                     : "Start listening to see the live transcript. Past calls live in Settings → Transcripts.")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-                    .frame(maxWidth: .infinity, minHeight: 60, alignment: .center)
+                VStack(spacing: 8) {
+                    Image(systemName: app.isListening ? "waveform" : "text.bubble")
+                        .font(.system(size: 26))
+                        .foregroundStyle(.tertiary)
+                    Text(app.isListening
+                         ? "Listening — the transcript appears here as people speak…"
+                         : "Start listening to see the live transcript. Past calls live in Settings → Transcripts.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .multilineTextAlignment(.center)
+                }
+                .frame(maxWidth: .infinity, minHeight: 90, alignment: .center)
+                .padding(.vertical, 12)
             } else {
                 ScrollViewReader { proxy in
                     ScrollView {
