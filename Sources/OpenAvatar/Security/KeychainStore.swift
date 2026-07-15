@@ -64,41 +64,68 @@ struct KeychainStore {
     /// the prompt returns after each update. The data-protection keychain
     /// scopes access to the app's keychain-access-group entitlement instead,
     /// so the app reads its own items silently and updates don't re-prompt.
-    private func baseQuery(account: String) -> [String: Any] {
-        [
+    private func baseQuery(account: String, dataProtection: Bool) -> [String: Any] {
+        var query: [String: Any] = [
             kSecClass as String: kSecClassGenericPassword,
             kSecAttrService as String: service,
-            kSecAttrAccount as String: account,
-            kSecUseDataProtectionKeychain as String: true
+            kSecAttrAccount as String: account
         ]
+        // Prefer the data-protection keychain; the legacy fallback omits this so
+        // the app still works when the keychain-access-group entitlement is
+        // absent or ignored (e.g. an ad-hoc build whose entitlement macOS drops).
+        if dataProtection {
+            query[kSecUseDataProtectionKeychain as String] = true
+        }
+        return query
     }
 
     private func setRaw(_ value: String, account: String) {
-        let query = baseQuery(account: account)
         let attributes: [String: Any] = [
             kSecValueData as String: Data(value.utf8),
             kSecAttrAccessible as String: kSecAttrAccessibleWhenUnlockedThisDeviceOnly
         ]
-        let status = SecItemUpdate(query as CFDictionary, attributes as CFDictionary)
-        if status == errSecItemNotFound {
-            var add = query
-            add.merge(attributes) { _, new in new }
-            SecItemAdd(add as CFDictionary, nil)
+        func write(dataProtection: Bool) -> OSStatus {
+            let query = baseQuery(account: account, dataProtection: dataProtection)
+            var status = SecItemUpdate(query as CFDictionary, attributes as CFDictionary)
+            if status == errSecItemNotFound {
+                var add = query
+                add.merge(attributes) { _, new in new }
+                status = SecItemAdd(add as CFDictionary, nil)
+            }
+            return status
+        }
+        // errSecMissingEntitlement (-34018): the data-protection keychain
+        // rejected us for lacking a keychain-access-group entitlement — retry
+        // against the legacy keychain so ad-hoc builds still store secrets.
+        if write(dataProtection: true) == errSecMissingEntitlement {
+            _ = write(dataProtection: false)
         }
     }
 
     private func getRaw(account: String) -> String? {
-        var query = baseQuery(account: account)
-        query[kSecReturnData as String] = true
-        query[kSecMatchLimit as String] = kSecMatchLimitOne
-        var result: AnyObject?
-        let status = SecItemCopyMatching(query as CFDictionary, &result)
-        guard status == errSecSuccess, let data = result as? Data else { return nil }
-        return String(data: data, encoding: .utf8)
+        func read(dataProtection: Bool) -> (OSStatus, String?) {
+            var query = baseQuery(account: account, dataProtection: dataProtection)
+            query[kSecReturnData as String] = true
+            query[kSecMatchLimit as String] = kSecMatchLimitOne
+            var result: AnyObject?
+            let status = SecItemCopyMatching(query as CFDictionary, &result)
+            guard status == errSecSuccess, let data = result as? Data else { return (status, nil) }
+            return (status, String(data: data, encoding: .utf8))
+        }
+        let (status, value) = read(dataProtection: true)
+        if status == errSecMissingEntitlement {
+            return read(dataProtection: false).1
+        }
+        return value
     }
 
     private func deleteRaw(account: String) {
-        SecItemDelete(baseQuery(account: account) as CFDictionary)
+        // Delete from both keychains so a secret can't linger in whichever store
+        // an earlier build wrote it to.
+        let status = SecItemDelete(baseQuery(account: account, dataProtection: true) as CFDictionary)
+        if status == errSecMissingEntitlement {
+            SecItemDelete(baseQuery(account: account, dataProtection: false) as CFDictionary)
+        }
     }
 #else
     // Non-Apple platforms (CI linting only): in-memory fallback, never persisted.
