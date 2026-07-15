@@ -10,6 +10,8 @@ import Foundation
 struct WhisperLocalTranscriber: Transcriber {
     let cliPath: String
     let modelPath: String
+    /// BCP-47-ish whisper language code, or "auto" to detect per chunk.
+    var language: String = "auto"
 
     func transcribe(_ chunk: AudioChunk) async throws -> [TranscriptSegment] {
         guard FileManager.default.isExecutableFile(atPath: cliPath) else {
@@ -37,7 +39,7 @@ struct WhisperLocalTranscriber: Transcriber {
             "-m", modelPath,
             "-f", wavURL.path,
             "--output-json", "--output-file", outBase,
-            "--no-prints", "--language", "en"
+            "--no-prints", "--language", language
         ]
         let stderrPipe = Pipe()
         process.standardError = stderrPipe
@@ -72,9 +74,21 @@ struct WhisperLocalTranscriber: Transcriber {
         }
     }
 
-    /// Filters whisper hallucination artifacts on silence.
+    /// Filters whisper's non-speech annotations and hallucination artifacts:
+    /// exact-match noise tokens, lines with no letters, and lines that are
+    /// entirely a single bracketed/parenthetical annotation like
+    /// "[INAUDIBLE]", "[SOUND]", "(keyboard clicking)", "(speaking in foreign
+    /// language)". Real speech that merely contains a parenthetical is kept.
     static func isNoise(_ text: String) -> Bool {
         let noise = ["[BLANK_AUDIO]", "[Music]", "[music]", "(silence)", "[silence]", "."]
-        return noise.contains(text) || text.allSatisfy { !$0.isLetter }
+        if noise.contains(text) || text.allSatisfy({ !$0.isLetter }) { return true }
+        // Whole-line annotation: starts and ends with matching brackets and
+        // has no other text around it.
+        let trimmed = text.trimmingCharacters(in: .whitespaces)
+        if (trimmed.hasPrefix("[") && trimmed.hasSuffix("]") && !trimmed.dropFirst().dropLast().contains("["))
+            || (trimmed.hasPrefix("(") && trimmed.hasSuffix(")") && !trimmed.dropFirst().dropLast().contains("(")) {
+            return true
+        }
+        return false
     }
 }

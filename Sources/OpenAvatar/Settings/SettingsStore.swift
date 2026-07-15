@@ -22,6 +22,30 @@ struct ModelRoute: Codable, Equatable {
     var model: String
 }
 
+/// Language options for the transcription picker. "auto" detects per chunk;
+/// the rest are common whisper language codes. Not exhaustive — whisper
+/// supports ~99 languages; a manual code in Advanced also works.
+enum TranscriptionLanguage {
+    static let options: [(code: String, label: String)] = [
+        ("auto", "Auto-detect (multilingual)"),
+        ("en", "English"),
+        ("hu", "Hungarian"),
+        ("de", "German"),
+        ("fr", "French"),
+        ("es", "Spanish"),
+        ("it", "Italian"),
+        ("pt", "Portuguese"),
+        ("nl", "Dutch"),
+        ("pl", "Polish"),
+        ("ru", "Russian"),
+        ("uk", "Ukrainian"),
+        ("tr", "Turkish"),
+        ("ja", "Japanese"),
+        ("ko", "Korean"),
+        ("zh", "Chinese")
+    ]
+}
+
 /// Non-secret settings, UserDefaults-backed. Secrets are in KeychainStore only.
 final class SettingsStore: ObservableObject {
     static let shared = SettingsStore()
@@ -38,6 +62,10 @@ final class SettingsStore: ObservableObject {
     @Published var whisperModelPath: String { didSet { defaults.set(whisperModelPath, forKey: "whisperModelPath") } }
     @Published var cloudSTTBaseURL: String { didSet { defaults.set(cloudSTTBaseURL, forKey: "cloudSTTBaseURL") } }
     @Published var cloudSTTModel: String { didSet { defaults.set(cloudSTTModel, forKey: "cloudSTTModel") } }
+    /// "auto" detects language per chunk; or a whisper code like "hu", "en".
+    @Published var transcriptionLanguage: String { didSet { defaults.set(transcriptionLanguage, forKey: "transcriptionLanguage") } }
+    /// Per-voice diarization on the system-audio channel (Speaker 1/2/3…).
+    @Published var diarizationEnabled: Bool { didSet { defaults.set(diarizationEnabled, forKey: "diarizationEnabled") } }
 
     // MARK: LLM
     @Published var openAIBaseURL: String { didSet { defaults.set(openAIBaseURL, forKey: "openAIBaseURL") } }
@@ -75,9 +103,11 @@ final class SettingsStore: ObservableObject {
         transcriptionMode = TranscriptionMode(rawValue: defaults.string(forKey: "transcriptionMode") ?? "") ?? .local
         whisperCLIPath = defaults.string(forKey: "whisperCLIPath") ?? "/opt/homebrew/bin/whisper-cli"
         whisperModelPath = defaults.string(forKey: "whisperModelPath")
-            ?? AppPaths.models.appendingPathComponent("ggml-base.en.bin").path
+            ?? AppPaths.models.appendingPathComponent("ggml-base.bin").path
         cloudSTTBaseURL = defaults.string(forKey: "cloudSTTBaseURL") ?? "https://api.openai.com/v1"
         cloudSTTModel = defaults.string(forKey: "cloudSTTModel") ?? "whisper-1"
+        transcriptionLanguage = defaults.string(forKey: "transcriptionLanguage") ?? "auto"
+        diarizationEnabled = (defaults.object(forKey: "diarizationEnabled") as? Bool) ?? true
 
         openAIBaseURL = defaults.string(forKey: "openAIBaseURL") ?? "https://api.openai.com/v1"
         ollamaBaseURL = defaults.string(forKey: "ollamaBaseURL") ?? "http://localhost:11434"

@@ -71,6 +71,18 @@ final class PipelineParsingTests: XCTestCase {
         XCTAssertEqual(segments[0].source, .mic)
     }
 
+    func testWhisperFiltersNonSpeechAnnotations() {
+        // Whole-line annotations whisper emits for non-speech / undetected
+        // language — all dropped.
+        for annotation in ["(speaking in foreign language)", "[INAUDIBLE]",
+                           "[SOUND]", "(keyboard clicking)", "[BLANK_AUDIO]"] {
+            XCTAssertTrue(WhisperLocalTranscriber.isNoise(annotation), annotation)
+        }
+        // Real speech that merely contains a parenthetical is kept.
+        XCTAssertFalse(WhisperLocalTranscriber.isNoise("Let's merge it (the header PR) now"))
+        XCTAssertFalse(WhisperLocalTranscriber.isNoise("Igen, csináljuk meg holnap"))
+    }
+
     // MARK: WAV encoding
 
     func testWAVHeader() {

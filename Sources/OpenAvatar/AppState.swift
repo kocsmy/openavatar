@@ -60,6 +60,7 @@ final class AppState: ObservableObject {
     private(set) lazy var consolidator = MemoryConsolidator(router: router, store: store)
     private(set) lazy var proactive = ProactiveEngine(router: router, store: store)
 
+    private(set) lazy var diarizer = SpeakerDiarizer()
     private var capture: AudioCaptureService?
     private var currentCallID: UUID?
     private var callDetectorTimer: Timer?
@@ -93,7 +94,10 @@ final class AppState: ObservableObject {
             try service.start()
             capture = service
             isListening = true
-            Task { await detector.updateWakePhrase(settings.assistantName) }
+            Task {
+                await detector.updateWakePhrase(settings.assistantName)
+                await diarizer.reset()   // speaker numbering restarts each call
+            }
         } catch {
             reportError(error)
         }
@@ -178,8 +182,18 @@ final class AppState: ObservableObject {
         Task {
             do {
                 let transcriber = makeTranscriber()
-                let segments = try await transcriber.transcribe(chunk)
+                var segments = try await transcriber.transcribe(chunk)
                 guard !segments.isEmpty else { return }
+
+                // Per-voice diarization on the "Others" (system) channel.
+                if settings.diarizationEnabled, chunk.source == .system {
+                    for i in segments.indices {
+                        if let speaker = await diarizer.label(for: segments[i], in: chunk) {
+                            segments[i].speaker = speaker
+                        }
+                    }
+                }
+
                 try store.insert(segments, callID: callID)
                 liveSegments.append(contentsOf: segments)
                 if liveSegments.count > 200 { liveSegments.removeFirst(liveSegments.count - 200) }
@@ -199,13 +213,15 @@ final class AppState: ObservableObject {
         switch settings.transcriptionMode {
         case .local:
             return WhisperLocalTranscriber(cliPath: settings.whisperCLIPath,
-                                           modelPath: settings.whisperModelPath)
+                                           modelPath: settings.whisperModelPath,
+                                           language: settings.transcriptionLanguage)
         case .cloud:
             let key = KeychainStore.shared.get(.cloudSTTAPIKey) ?? ""
             return CloudTranscriber(apiKey: key,
                                     baseURL: URL(string: settings.cloudSTTBaseURL)
                                         ?? URL(string: "https://api.openai.com/v1")!,
-                                    model: settings.cloudSTTModel)
+                                    model: settings.cloudSTTModel,
+                                    language: settings.transcriptionLanguage)
         }
     }
 

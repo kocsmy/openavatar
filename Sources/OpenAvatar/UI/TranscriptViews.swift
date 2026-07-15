@@ -71,7 +71,7 @@ struct TranscriptRow: View {
                 .foregroundStyle(.tertiary)
             Text(segment.speakerLabel)
                 .font(.caption2.weight(.semibold))
-                .foregroundStyle(segment.source == .mic ? Color.accentColor : Color.secondary)
+                .foregroundStyle(TranscriptFormatter.color(for: segment))
                 .frame(width: 44, alignment: .leading)
             Text(segment.text)
                 .font(.caption)
@@ -85,6 +85,17 @@ enum TranscriptFormatter {
     /// Call-relative mm:ss.
     static func clock(_ t: TimeInterval) -> String {
         String(format: "%02d:%02d", Int(t) / 60, Int(t) % 60)
+    }
+
+    /// Stable, distinct color per speaker label. "You" uses the accent color.
+    static func color(for segment: TranscriptSegment) -> Color {
+        if segment.source == .mic { return .accentColor }
+        let palette: [Color] = [.blue, .green, .orange, .purple, .pink, .teal, .indigo, .brown]
+        guard let speaker = segment.speaker,
+              let n = Int(speaker.split(separator: " ").last ?? "") else {
+            return .secondary
+        }
+        return palette[(n - 1) % palette.count]
     }
 
     static func plainText(_ segments: [TranscriptSegment], callStart: Date? = nil) -> String {
@@ -174,7 +185,7 @@ struct TranscriptsSettingsTab: View {
                                         .foregroundStyle(.tertiary)
                                     Text(segment.speakerLabel)
                                         .font(.caption2.weight(.semibold))
-                                        .foregroundStyle(segment.source == .mic ? Color.accentColor : Color.secondary)
+                                        .foregroundStyle(TranscriptFormatter.color(for: segment))
                                         .frame(width: 44, alignment: .leading)
                                     Text(segment.text)
                                         .font(.caption)
