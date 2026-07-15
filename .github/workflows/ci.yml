@@ -56,43 +56,68 @@ jobs:
       - name: Test
         run: swift test --skip-build
 
-      - name: Assemble app bundle
-        if: env.IS_RELEASE == 'true'
-        run: ./scripts/make-app.sh release
-
-      - name: Build DMG installer
-        if: env.IS_RELEASE == 'true'
-        run: ./scripts/make-dmg.sh
-
-      - name: Upload DMG artifact
-        if: env.IS_RELEASE == 'true'
-        uses: actions/upload-artifact@v4
-        with:
-          name: OpenAvatar-dmg
-          path: build/OpenAvatar.dmg
-          if-no-files-found: error
-
-      - name: Release (on version tags, or manual dispatch with release_tag)
+      # Single packaging + release path. Runs only for version tags or a manual
+      # dispatch with release_tag. Signs with Developer ID + notarizes when the
+      # signing secrets are present; otherwise ad-hoc (launches, not notarized).
+      - name: Package, sign, notarize & release
         if: env.IS_RELEASE == 'true'
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           TAG: ${{ startsWith(github.ref, 'refs/tags/v') && github.ref_name || inputs.release_tag }}
           SPARKLE_ED_PRIVATE_KEY: ${{ secrets.SPARKLE_ED_PRIVATE_KEY }}
+          DEVELOPER_ID_CERT_P12_BASE64: ${{ secrets.DEVELOPER_ID_CERT_P12_BASE64 }}
+          DEVELOPER_ID_CERT_PASSWORD: ${{ secrets.DEVELOPER_ID_CERT_PASSWORD }}
+          APPLE_API_KEY_ID: ${{ secrets.APPLE_API_KEY_ID }}
+          APPLE_API_ISSUER_ID: ${{ secrets.APPLE_API_ISSUER_ID }}
+          APPLE_API_KEY_P8_BASE64: ${{ secrets.APPLE_API_KEY_P8_BASE64 }}
+          KEYCHAIN_PASSWORD: ${{ github.run_id }}
         run: |
           set -euo pipefail
           if [ -z "${SPARKLE_ED_PRIVATE_KEY:-}" ]; then
             echo "::error::SPARKLE_ED_PRIVATE_KEY secret is not set. Auto-updates must be signed — add the secret in repo Settings → Secrets and variables → Actions, then re-run."
             exit 1
           fi
-          # Rebuild the bundle with the release version stamped in (Sparkle
-          # compares CFBundleVersion to decide whether an update applies).
+
+          # Enable Developer ID signing + notarization only when every required
+          # secret is present; otherwise fall back to ad-hoc (unnotarized).
+          NOTARIZE=0
+          if [ -n "${DEVELOPER_ID_CERT_P12_BASE64:-}" ] && [ -n "${APPLE_API_KEY_P8_BASE64:-}" ] \
+             && [ -n "${APPLE_API_KEY_ID:-}" ] && [ -n "${APPLE_API_ISSUER_ID:-}" ]; then
+            NOTARIZE=1
+            chmod +x scripts/setup-signing-keychain.sh scripts/notarize.sh
+            CODESIGN_IDENTITY="$(./scripts/setup-signing-keychain.sh | tail -1)"
+            export CODESIGN_IDENTITY
+            echo "Signing identity: ${CODESIGN_IDENTITY}"
+          else
+            echo "::warning::Developer ID / notary secrets not all set — building ad-hoc (not notarized). Users must run 'xattr -cr' before first launch."
+          fi
+
+          # Stamp the release version (Sparkle compares CFBundleVersion) and sign.
           VERSION="${TAG#v}" BUILD_NUMBER="${GITHUB_RUN_NUMBER}" ./scripts/make-app.sh release
-          ./scripts/make-dmg.sh
+
+          if [ "${NOTARIZE}" = "1" ]; then
+            ./scripts/notarize.sh build/OpenAvatar.app   # staples the .app
+          fi
+
+          # Sparkle auto-update asset (contains the stapled app) + DMG installer.
           ditto -c -k --keepParent build/OpenAvatar.app build/OpenAvatar.zip
+          ./scripts/make-dmg.sh
+          if [ "${NOTARIZE}" = "1" ]; then
+            ./scripts/notarize.sh build/OpenAvatar.dmg
+          fi
+
+          # Signed appcast for Sparkle.
           pip3 install --quiet pynacl || pip3 install --quiet --break-system-packages pynacl
           python3 scripts/make_appcast.py "${TAG}" build/OpenAvatar.zip > build/appcast.xml
+
+          if [ "${NOTARIZE}" = "1" ]; then
+            NOTES="Notarized by Apple — just download the DMG, drag OpenAvatar to Applications, and open it (no Terminal step needed). Already installed? The app updates itself in the background and asks to relaunch. The zip + appcast.xml assets are the auto-update feed."
+          else
+            NOTES="First install: download the DMG, drag to Applications, run \`xattr -cr /Applications/OpenAvatar.app\` before first launch (ad-hoc signed, not notarized). Already installed? The app updates itself in the background and asks to relaunch. The zip + appcast.xml assets are the auto-update feed."
+          fi
+
           gh release create "${TAG}" build/OpenAvatar.dmg build/OpenAvatar.zip build/appcast.xml \
             --repo "${GITHUB_REPOSITORY}" \
             --target "${GITHUB_SHA}" \
             --title "OpenAvatar ${TAG}" \
-            --notes "First install: download the DMG, drag to Applications, run \`xattr -cr /Applications/OpenAvatar.app\` before first launch (ad-hoc signed, not notarized). Already installed? The app updates itself: it downloads new versions in the background and asks to relaunch. The zip + appcast.xml assets are the auto-update feed."
+            --notes "${NOTES}"
