@@ -56,15 +56,27 @@ struct KeychainStore {
     // MARK: Raw primitives
 
 #if canImport(Security)
-    private func setRaw(_ value: String, account: String) {
-        let data = Data(value.utf8)
-        let query: [String: Any] = [
+    /// Use the modern data-protection keychain, NOT the legacy file-based
+    /// login keychain. The legacy keychain gates access with a per-code-
+    /// signature ACL and shows the "wants to use your confidential
+    /// information" dialog; because the app is ad-hoc signed, its signature
+    /// changes on every build/auto-update, so "Always Allow" never sticks and
+    /// the prompt returns after each update. The data-protection keychain
+    /// scopes access to the app's keychain-access-group entitlement instead,
+    /// so the app reads its own items silently and updates don't re-prompt.
+    private func baseQuery(account: String) -> [String: Any] {
+        [
             kSecClass as String: kSecClassGenericPassword,
             kSecAttrService as String: service,
-            kSecAttrAccount as String: account
+            kSecAttrAccount as String: account,
+            kSecUseDataProtectionKeychain as String: true
         ]
+    }
+
+    private func setRaw(_ value: String, account: String) {
+        let query = baseQuery(account: account)
         let attributes: [String: Any] = [
-            kSecValueData as String: data,
+            kSecValueData as String: Data(value.utf8),
             kSecAttrAccessible as String: kSecAttrAccessibleWhenUnlockedThisDeviceOnly
         ]
         let status = SecItemUpdate(query as CFDictionary, attributes as CFDictionary)
@@ -76,13 +88,9 @@ struct KeychainStore {
     }
 
     private func getRaw(account: String) -> String? {
-        let query: [String: Any] = [
-            kSecClass as String: kSecClassGenericPassword,
-            kSecAttrService as String: service,
-            kSecAttrAccount as String: account,
-            kSecReturnData as String: true,
-            kSecMatchLimit as String: kSecMatchLimitOne
-        ]
+        var query = baseQuery(account: account)
+        query[kSecReturnData as String] = true
+        query[kSecMatchLimit as String] = kSecMatchLimitOne
         var result: AnyObject?
         let status = SecItemCopyMatching(query as CFDictionary, &result)
         guard status == errSecSuccess, let data = result as? Data else { return nil }
@@ -90,12 +98,7 @@ struct KeychainStore {
     }
 
     private func deleteRaw(account: String) {
-        let query: [String: Any] = [
-            kSecClass as String: kSecClassGenericPassword,
-            kSecAttrService as String: service,
-            kSecAttrAccount as String: account
-        ]
-        SecItemDelete(query as CFDictionary)
+        SecItemDelete(baseQuery(account: account) as CFDictionary)
     }
 #else
     // Non-Apple platforms (CI linting only): in-memory fallback, never persisted.

@@ -199,13 +199,15 @@ final class AppState: ObservableObject {
         switch settings.transcriptionMode {
         case .local:
             return WhisperLocalTranscriber(cliPath: settings.whisperCLIPath,
-                                           modelPath: settings.whisperModelPath)
+                                           modelPath: settings.whisperModelPath,
+                                           language: settings.transcriptionLanguage)
         case .cloud:
             let key = KeychainStore.shared.get(.cloudSTTAPIKey) ?? ""
             return CloudTranscriber(apiKey: key,
                                     baseURL: URL(string: settings.cloudSTTBaseURL)
                                         ?? URL(string: "https://api.openai.com/v1")!,
-                                    model: settings.cloudSTTModel)
+                                    model: settings.cloudSTTModel,
+                                    language: settings.transcriptionLanguage)
         }
     }
 

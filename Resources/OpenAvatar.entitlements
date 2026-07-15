@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <!-- Scopes data-protection keychain access to this app's own group, so it
+         reads its stored tokens without the legacy per-signature ACL prompt.
+         No team prefix: the app is ad-hoc signed, so the group is the literal
+         bundle identifier. -->
+    <key>keychain-access-groups</key>
+    <array>
+        <string>com.openavatar.app</string>
+    </array>
+</dict>
+</plist>

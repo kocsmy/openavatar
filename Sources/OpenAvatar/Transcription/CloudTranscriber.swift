@@ -7,6 +7,8 @@ struct CloudTranscriber: Transcriber {
     let apiKey: String
     let baseURL: URL      // e.g. https://api.openai.com/v1
     let model: String     // e.g. whisper-1
+    /// "auto" (omit language → server detects) or an ISO-639-1 code like "hu".
+    var language: String = "auto"
 
     func transcribe(_ chunk: AudioChunk) async throws -> [TranscriptSegment] {
         let wav = WAVEncoder.wavData(fromPCM: chunk.pcm)
@@ -18,6 +20,10 @@ struct CloudTranscriber: Transcriber {
         }
         addField("model", model)
         addField("response_format", "json")
+        // Omit "language" for auto-detect; pass the ISO code otherwise.
+        if language != "auto", !language.isEmpty {
+            addField("language", language)
+        }
         body.append(Data("--\(boundary)\r\nContent-Disposition: form-data; name=\"file\"; filename=\"audio.wav\"\r\nContent-Type: audio/wav\r\n\r\n".utf8))
         body.append(wav)
         body.append(Data("\r\n--\(boundary)--\r\n".utf8))

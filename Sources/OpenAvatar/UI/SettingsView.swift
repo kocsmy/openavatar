@@ -97,6 +97,15 @@ struct TranscriptionSettingsTab: View {
                         .foregroundStyle(.orange)
                 }
             }
+            Section("Language") {
+                Picker("Spoken language", selection: $settings.transcriptionLanguage) {
+                    ForEach(TranscriptionLanguage.options, id: \.code) { option in
+                        Text(option.label).tag(option.code)
+                    }
+                }
+                Text("Auto-detect handles multilingual calls (e.g. mixing Hungarian and English). Local mode needs the multilingual model — the auto-setup below installs it.")
+                    .font(.caption).foregroundStyle(.secondary)
+            }
             if settings.transcriptionMode == .local {
                 Section("Local transcription (whisper.cpp)") {
                     WhisperSetupView(service: whisperSetup)

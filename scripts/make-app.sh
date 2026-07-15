@@ -39,8 +39,17 @@ else
   echo "⚠ Sparkle.framework not found in .build — auto-update disabled in this build"
 fi
 
-echo "▸ codesign (ad-hoc)"
-codesign --force --deep --sign - "${APP}"
+echo "▸ codesign (ad-hoc, with entitlements)"
+# Sign nested frameworks first, then the app with the keychain-access-group
+# entitlement so the data-protection keychain grants silent access to our
+# own items (no repeated login-keychain password prompts across updates).
+find "${APP}/Contents/Frameworks" -name '*.framework' -maxdepth 1 -print 2>/dev/null | while read -r fw; do
+  codesign --force --sign - "${fw}"
+done
+codesign --force --sign - \
+  --entitlements Resources/OpenAvatar.entitlements \
+  --identifier com.openavatar.app \
+  "${APP}"
 
 echo "✓ Built ${APP}"
 echo "  Run with: open ${APP}"

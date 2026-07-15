@@ -24,7 +24,10 @@ final class WhisperSetupService: ObservableObject {
         }
     }
 
-    static let modelURL = URL(string: "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-base.en.bin")!
+    /// Multilingual base model (NOT the .en variant) so auto-detect works for
+    /// Hungarian and every other language, not just English.
+    static let modelURL = URL(string: "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-base.bin")!
+    static let modelFilename = "ggml-base.bin"
 
     private static let cliCandidates = [
         "/opt/homebrew/bin/whisper-cli",
@@ -90,13 +93,13 @@ final class WhisperSetupService: ObservableObject {
         settings.whisperCLIPath = cliPath!
 
         // 2. Model file (~150 MB, one-time).
-        let modelPath = AppPaths.models.appendingPathComponent("ggml-base.en.bin").path
+        let modelPath = AppPaths.models.appendingPathComponent(Self.modelFilename).path
         if !Self.modelExists(at: modelPath) {
             phase = .downloadingModel
             do {
                 let (tempURL, response) = try await URLSession.shared.download(from: Self.modelURL)
                 guard (response as? HTTPURLResponse).map({ (200...299).contains($0.statusCode) }) ?? false else {
-                    phase = .failed("Model download failed (HTTP \((response as? HTTPURLResponse)?.statusCode ?? -1)). Retry, or download ggml-base.en.bin manually from huggingface.co/ggerganov/whisper.cpp.")
+                    phase = .failed("Model download failed (HTTP \((response as? HTTPURLResponse)?.statusCode ?? -1)). Retry, or download \(Self.modelFilename) manually from huggingface.co/ggerganov/whisper.cpp.")
                     return
                 }
                 let destination = URL(fileURLWithPath: modelPath)
@@ -110,7 +113,7 @@ final class WhisperSetupService: ObservableObject {
         settings.whisperModelPath = modelPath
         settings.transcriptionMode = .local
 
-        phase = .done("Local transcription ready — whisper-cli at \(cliPath!), base.en model installed.")
+        phase = .done("Local transcription ready — whisper-cli at \(cliPath!), multilingual base model installed (auto-detects language).")
     }
 
     // MARK: Shell helpers
