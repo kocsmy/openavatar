@@ -393,12 +393,13 @@ struct TranscriptsSettingsTab: View {
                     Button {
                         if let id = selectedCallID { app.reviewPastCall(id) }
                     } label: { Label("Open call review", systemImage: "checklist") }
-                        .disabled(selectedCallID == nil
-                                  || app.isListening
-                                  || !(selectedCallID.map { app.hasReviewableDecisions($0) } ?? false))
+                        // Enabled for any selected call: pending items show for
+                        // review, and a fully-handled call still opens so "Show
+                        // handled" can display what happened.
+                        .disabled(selectedCallID == nil || app.isListening)
                         .help(app.isListening
                               ? "Available when you're not in a live call"
-                              : "Re-open the action-item review for this call")
+                              : "Open this call's review — pending items and, via Show handled, everything already done")
                     Button("Export as Markdown…") { exportMarkdown() }
                         .disabled(segments.isEmpty)
                     Button {

@@ -225,11 +225,6 @@ final class AppState: ObservableObject {
 #endif
     }
 
-    /// Whether a given call still has unhandled decisions worth reviewing.
-    func hasReviewableDecisions(_ callID: UUID) -> Bool {
-        !(((try? store.decisions(callID: callID)) ?? []).awaitingReview.isEmpty)
-    }
-
     /// Already-handled decisions of the call currently shown in the review —
     /// the audit trail behind the "Show handled" toggle.
     func handledDecisions() -> [Decision] {
