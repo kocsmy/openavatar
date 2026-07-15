@@ -313,6 +313,29 @@ final class AppState: ObservableObject {
         Task { await diarizer.reset() }   // reload names for ongoing diarization
     }
 
+    /// Merge one voice into another (fixes over-splitting). Persists, updates the
+    /// live transcript, and reloads the diarizer so ongoing speech follows.
+    func mergeSpeaker(sourceID: String, into targetID: String) {
+        guard let source = UUID(uuidString: sourceID),
+              let target = UUID(uuidString: targetID), source != target else { return }
+        do {
+            try store.mergeSpeaker(source, into: target)
+        } catch {
+            reportError(error)
+            return
+        }
+        let resolved = (try? store.allSpeakerProfiles())?.first { $0.id == target }?.displayLabel
+        for i in liveSegments.indices where liveSegments[i].speakerID == sourceID {
+            liveSegments[i].speakerID = targetID
+        }
+        if let resolved {
+            for i in liveSegments.indices where liveSegments[i].speakerID == targetID {
+                liveSegments[i].speaker = resolved
+            }
+        }
+        Task { await diarizer.reset() }
+    }
+
     private func makeTranscriber() -> Transcriber {
         switch settings.transcriptionMode {
         case .local:

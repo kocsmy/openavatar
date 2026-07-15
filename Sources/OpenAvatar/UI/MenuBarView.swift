@@ -60,7 +60,7 @@ struct MenuBarView: View {
 
             if !app.proactiveSuggestions.isEmpty {
                 section("Suggestions") {
-                    ForEach(app.proactiveSuggestions) { suggestion in
+                    boundedRows(app.proactiveSuggestions, rowHeight: 72) { suggestion in
                         suggestionRow(suggestion)
                     }
                 }
@@ -76,14 +76,9 @@ struct MenuBarView: View {
 
             if !app.detectedDecisions.isEmpty {
                 section("Detected this call") {
-                    ScrollView {
-                        VStack(alignment: .leading, spacing: 8) {
-                            ForEach(app.detectedDecisions) { decision in
-                                DecisionRow(decision: decision)
-                            }
-                        }
+                    boundedRows(app.detectedDecisions, rowHeight: 74) { decision in
+                        DecisionRow(decision: decision)
                     }
-                    .frame(maxHeight: 220)
                 }
             }
 
@@ -291,6 +286,25 @@ struct MenuBarView: View {
         }
     }
 
+    /// Shows up to `visibleCap` rows at full height; when there are more, the
+    /// list is capped to that many rows and scrolls (a peek of the next row
+    /// signals there's more).
+    @ViewBuilder
+    private func boundedRows<Data: RandomAccessCollection, RowContent: View>(
+        _ data: Data, visibleCap: Int = 3, rowHeight: CGFloat,
+        @ViewBuilder row: @escaping (Data.Element) -> RowContent
+    ) -> some View where Data.Element: Identifiable {
+        let rows = VStack(alignment: .leading, spacing: 8) {
+            ForEach(data) { row($0) }
+        }
+        if data.count > visibleCap {
+            ScrollView { rows }
+                .frame(height: rowHeight * CGFloat(visibleCap))
+        } else {
+            rows
+        }
+    }
+
     private func sectionTitle(_ text: String) -> some View {
         Text(text.uppercased())
             .font(.caption2.weight(.semibold))
@@ -310,7 +324,10 @@ struct DecisionRow: View {
     var body: some View {
         HStack(alignment: .top, spacing: 8) {
             Image(systemName: icon)
-                .foregroundStyle(belowThreshold ? .tertiary : .secondary)
+                .font(.body)
+                .symbolRenderingMode(.hierarchical)
+                .foregroundStyle(belowThreshold ? Color.secondary : Color.accentColor)
+                .frame(width: 22, alignment: .center)
             VStack(alignment: .leading, spacing: 2) {
                 Text(decision.summary)
                     .font(.callout)
@@ -320,7 +337,7 @@ struct DecisionRow: View {
                     .foregroundStyle(.tertiary)
                     .lineLimit(2)
             }
-            Spacer()
+            Spacer(minLength: 6)
             Button("Prepare") { app.prepare(decision) }
                 .controlSize(.small)
             Menu {
@@ -331,7 +348,9 @@ struct DecisionRow: View {
                 Image(systemName: "xmark.circle")
             }
             .menuStyle(.borderlessButton)
-            .frame(width: 24)
+            .menuIndicator(.hidden)
+            .fixedSize()
+            .help("Dismiss")
         }
         .opacity(belowThreshold ? 0.6 : 1)
     }
