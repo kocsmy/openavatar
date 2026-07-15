@@ -43,13 +43,23 @@ echo "▸ codesign (ad-hoc, with entitlements)"
 # Sign nested frameworks first, then the app with the keychain-access-group
 # entitlement so the data-protection keychain grants silent access to our
 # own items (no repeated login-keychain password prompts across updates).
+#
+# CRITICAL: Sparkle.framework ships nested helper binaries (Autoupdate,
+# Updater.app, XPCServices/*.xpc). They must each be validly signed or macOS
+# refuses to launch the whole app ("OpenAvatar.app can't be opened"). --deep
+# signs every nested executable inside the framework in one pass; without it
+# only the framework's own Mach-O gets a signature and the helpers stay
+# unsigned. Sign nested items before the outer bundle that references them.
 find "${APP}/Contents/Frameworks" -name '*.framework' -maxdepth 1 -print 2>/dev/null | while read -r fw; do
-  codesign --force --sign - "${fw}"
+  codesign --force --deep --sign - "${fw}"
 done
 codesign --force --sign - \
   --entitlements Resources/OpenAvatar.entitlements \
   --identifier com.openavatar.app \
   "${APP}"
+
+echo "▸ verifying signature (Gatekeeper launch validity)"
+codesign --verify --deep --strict --verbose=2 "${APP}"
 
 echo "✓ Built ${APP}"
 echo "  Run with: open ${APP}"
