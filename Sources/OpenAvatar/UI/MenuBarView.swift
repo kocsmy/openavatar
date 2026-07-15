@@ -17,6 +17,11 @@ struct MenuBarView: View {
 
     @Environment(\.openSettings) private var openSettings
 
+    /// Starts at the cap and shrinks to the measured content height, so the
+    /// popover never overflows and there's no first-frame flash.
+    @State private var actionsHeight: CGFloat = 440
+    private let maxContentHeight: CGFloat = 440
+
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             header
@@ -25,20 +30,31 @@ struct MenuBarView: View {
                 .padding(.bottom, 10)
             Divider()
 
-            VStack(alignment: .leading, spacing: 14) {
-                Picker("", selection: $tab) {
-                    ForEach(PopoverTab.allCases, id: \.self) { Text($0.rawValue).tag($0) }
-                }
-                .pickerStyle(.segmented)
-                .labelsHidden()
-
-                if tab == .transcript {
-                    LiveTranscriptView()
-                } else {
-                    actionsContent
-                }
+            Picker("", selection: $tab) {
+                ForEach(PopoverTab.allCases, id: \.self) { Text($0.rawValue).tag($0) }
             }
-            .padding(14)
+            .pickerStyle(.segmented)
+            .labelsHidden()
+            .padding(.horizontal, 14)
+            .padding(.top, 12)
+            .padding(.bottom, 4)
+
+            if tab == .transcript {
+                LiveTranscriptView()
+                    .padding(.horizontal, 14)
+                    .padding(.bottom, 14)
+            } else {
+                // Measured scroll: as tall as the content, but never past the cap.
+                ScrollView {
+                    actionsContent
+                        .padding(14)
+                        .background(GeometryReader { geo in
+                            Color.clear.preference(key: PopoverHeightKey.self, value: geo.size.height)
+                        })
+                }
+                .frame(height: min(actionsHeight, maxContentHeight))
+                .onPreferenceChange(PopoverHeightKey.self) { actionsHeight = $0 }
+            }
 
             Divider()
             footer
@@ -310,6 +326,15 @@ struct MenuBarView: View {
             .font(.caption2.weight(.semibold))
             .foregroundStyle(.secondary)
             .kerning(0.4)
+    }
+}
+
+/// Reports the natural height of the actions content so the popover can size to
+/// it up to a cap (and scroll beyond), rather than overflowing the screen.
+private struct PopoverHeightKey: PreferenceKey {
+    static var defaultValue: CGFloat = 0
+    static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) {
+        value = max(value, nextValue())
     }
 }
 
