@@ -10,6 +10,7 @@ struct LiveTranscriptView: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
+            SpeakerRosterView()
             if app.liveSegments.isEmpty {
                 Text(app.isListening
                      ? "Listening — the transcript appears here as people speak…"
@@ -72,12 +73,96 @@ struct TranscriptRow: View {
             Text(segment.speakerLabel)
                 .font(.caption2.weight(.semibold))
                 .foregroundStyle(TranscriptFormatter.color(for: segment))
-                .frame(width: 44, alignment: .leading)
+                .frame(width: 64, alignment: .leading)
+                .lineLimit(1)
             Text(segment.text)
                 .font(.caption)
                 .textSelection(.enabled)
                 .frame(maxWidth: .infinity, alignment: .leading)
         }
+    }
+}
+
+// MARK: - Editable speaker roster (live call)
+
+/// Shows the distinct voices heard this call with inline renaming, plus the
+/// calendar attendees as one-tap name suggestions. A name assigned here sticks
+/// to the voice fingerprint — it relabels the whole transcript and carries to
+/// future calls.
+struct SpeakerRosterView: View {
+    @EnvironmentObject var app: AppState
+
+    var body: some View {
+        let speakers = app.callSpeakers
+        if !speakers.isEmpty || app.currentEvent != nil {
+            VStack(alignment: .leading, spacing: 4) {
+                if let event = app.currentEvent {
+                    Label(event.title, systemImage: "calendar")
+                        .font(.caption2).foregroundStyle(.secondary).lineLimit(1)
+                }
+                ForEach(speakers) { speaker in
+                    SpeakerRosterRow(speaker: speaker)
+                }
+                if speakers.isEmpty, !app.callAttendees.isEmpty {
+                    Text("Attendees: " + app.callAttendees.map(\.name).joined(separator: ", "))
+                        .font(.caption2).foregroundStyle(.tertiary).lineLimit(1)
+                }
+            }
+            .padding(6)
+            .background(RoundedRectangle(cornerRadius: 6).fill(.quaternary.opacity(0.4)))
+        }
+    }
+}
+
+struct SpeakerRosterRow: View {
+    @EnvironmentObject var app: AppState
+    let speaker: AppState.CallSpeaker
+    @State private var editing = false
+    @State private var draft = ""
+
+    var body: some View {
+        HStack(spacing: 6) {
+            Circle()
+                .fill(TranscriptFormatter.color(forSpeakerID: speaker.id, label: speaker.label))
+                .frame(width: 8, height: 8)
+            if editing {
+                TextField("Name", text: $draft)
+                    .textFieldStyle(.roundedBorder)
+                    .frame(maxWidth: 150)
+                    .onSubmit(commit)
+                Button("Save", action: commit).controlSize(.small)
+                Button("Cancel") { editing = false }.controlSize(.small)
+            } else {
+                Text(speaker.label).font(.caption.weight(.medium))
+                Text("(\(speaker.segmentCount))").font(.caption2).foregroundStyle(.tertiary)
+                Spacer()
+                if !app.callAttendees.isEmpty {
+                    Menu {
+                        ForEach(app.callAttendees) { attendee in
+                            Button(attendee.name) { app.renameSpeaker(id: speaker.id, to: attendee.name) }
+                        }
+                    } label: {
+                        Image(systemName: "person.crop.circle.badge.plus")
+                    }
+                    .menuStyle(.borderlessButton)
+                    .fixedSize()
+                    .help("Assign a calendar attendee's name")
+                }
+                Button {
+                    draft = speaker.label.hasPrefix("Speaker ") ? "" : speaker.label
+                    editing = true
+                } label: {
+                    Image(systemName: "pencil")
+                }
+                .buttonStyle(.borderless)
+                .help("Rename this voice")
+            }
+        }
+    }
+
+    private func commit() {
+        app.renameSpeaker(id: speaker.id, to: draft)
+        editing = false
     }
 }
 
@@ -87,15 +172,27 @@ enum TranscriptFormatter {
         String(format: "%02d:%02d", Int(t) / 60, Int(t) % 60)
     }
 
-    /// Stable, distinct color per speaker label. "You" uses the accent color.
+    static let speakerPalette: [Color] = [.blue, .green, .orange, .purple, .pink, .teal, .indigo, .brown]
+
+    /// Stable, distinct color per speaker. "You" uses the accent color.
     static func color(for segment: TranscriptSegment) -> Color {
         if segment.source == .mic { return .accentColor }
-        let palette: [Color] = [.blue, .green, .orange, .purple, .pink, .teal, .indigo, .brown]
-        guard let speaker = segment.speaker,
-              let n = Int(speaker.split(separator: " ").last ?? "") else {
-            return .secondary
+        if let sid = segment.speakerID {
+            return color(forSpeakerID: sid, label: segment.speaker)
         }
-        return palette[(n - 1) % palette.count]
+        // Fall back to the trailing number of a "Speaker N" label.
+        if let speaker = segment.speaker, let n = Int(speaker.split(separator: " ").last ?? "") {
+            return speakerPalette[(n - 1) % speakerPalette.count]
+        }
+        return .secondary
+    }
+
+    /// Deterministic color for a voice fingerprint id (stable across renames and
+    /// app launches — unlike Swift's per-run String.hashValue).
+    static func color(forSpeakerID id: String, label: String? = nil) -> Color {
+        var hash: UInt64 = 5381
+        for byte in id.utf8 { hash = (hash &* 33) &^ UInt64(byte) }
+        return speakerPalette[Int(hash % UInt64(speakerPalette.count))]
     }
 
     static func plainText(_ segments: [TranscriptSegment], callStart: Date? = nil) -> String {
@@ -121,6 +218,79 @@ enum TranscriptFormatter {
     }
 }
 
+// MARK: - Named voices library (rename any voice, past or present)
+
+/// Lists every stored voice fingerprint with an editable name. Renaming here
+/// relabels that voice everywhere — all past transcripts and future calls.
+struct SpeakerLibraryView: View {
+    @EnvironmentObject var app: AppState
+    /// Called after a rename so the parent can reload any visible transcript.
+    var onRename: () -> Void = {}
+
+    @State private var profiles: [SpeakerProfile] = []
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            HStack {
+                Text("Named voices").font(.headline)
+                Spacer()
+                Button("Refresh") { load() }.controlSize(.small)
+            }
+            Text("Give a voice a name once and it's recognized in every call — past transcripts are relabeled too.")
+                .font(.caption).foregroundStyle(.secondary)
+
+            if profiles.isEmpty {
+                Text("No voices captured yet. They appear here after a call with per-voice diarization on.")
+                    .font(.caption).foregroundStyle(.tertiary)
+                    .frame(maxWidth: .infinity, minHeight: 40, alignment: .center)
+            } else {
+                ForEach(profiles) { profile in
+                    SpeakerLibraryRow(profile: profile) { newName in
+                        app.renameSpeaker(id: profile.id.uuidString, to: newName)
+                        load()
+                        onRename()
+                    }
+                }
+            }
+        }
+        .onAppear { load() }
+    }
+
+    private func load() {
+        profiles = (try? app.store.allSpeakerProfiles()) ?? []
+    }
+}
+
+struct SpeakerLibraryRow: View {
+    let profile: SpeakerProfile
+    var onCommit: (String?) -> Void
+
+    @State private var draft = ""
+
+    var body: some View {
+        HStack(spacing: 8) {
+            Circle()
+                .fill(TranscriptFormatter.color(forSpeakerID: profile.id.uuidString))
+                .frame(width: 9, height: 9)
+            TextField("Speaker \(profile.ordinal)", text: $draft)
+                .textFieldStyle(.roundedBorder)
+                .frame(maxWidth: 200)
+                .onSubmit { onCommit(draft) }
+            Button("Save") { onCommit(draft) }
+                .controlSize(.small)
+                .disabled(draft.trimmingCharacters(in: .whitespaces).isEmpty)
+            if profile.isNamed {
+                Button("Clear") { draft = ""; onCommit(nil) }
+                    .controlSize(.small)
+            }
+            Text("\(profile.sampleCount) utterances")
+                .font(.caption2).foregroundStyle(.tertiary)
+            Spacer()
+        }
+        .onAppear { draft = profile.name ?? "" }
+    }
+}
+
 // MARK: - Saved transcripts (Settings tab)
 
 /// Browse every saved call: full transcript with speaker labels and
@@ -141,6 +311,12 @@ struct TranscriptsSettingsTab: View {
             Text("Saved transcripts").font(.headline)
             Text("Every call is transcribed and stored locally with timestamps. Select a call to read or export it.")
                 .font(.caption).foregroundStyle(.secondary)
+
+            SpeakerLibraryView {
+                // Reload the visible transcript so renames show immediately.
+                if let id = selectedCallID { segments = (try? app.store.segments(callID: id)) ?? [] }
+            }
+            Divider()
 
             if calls.isEmpty {
                 ContentUnavailableView("No calls yet", systemImage: "text.quote",

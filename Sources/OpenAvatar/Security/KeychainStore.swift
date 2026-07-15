@@ -21,6 +21,8 @@ struct KeychainStore {
         case smtpPassword = "integration.email.smtp"
         case gmailAccessToken = "integration.email.gmail.access"
         case gmailRefreshToken = "integration.email.gmail.refresh"
+        case googleClientSecret = "integration.google.client_secret"
+        case googleCalendarRefreshToken = "integration.google.calendar.refresh"
     }
 
     // MARK: Enum-keyed accessors (built-in secrets)

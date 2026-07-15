@@ -86,6 +86,14 @@ final class SettingsStore: ObservableObject {
     @Published var emailFromAddress: String { didSet { defaults.set(emailFromAddress, forKey: "emailFromAddress") } }
     @Published var userDisplayName: String { didSet { defaults.set(userDisplayName, forKey: "userDisplayName") } }
 
+    // MARK: Calendar (Google) — non-secret parts
+    /// OAuth client ID from the user's Google Cloud project (Desktop app type).
+    @Published var googleClientID: String { didSet { defaults.set(googleClientID, forKey: "googleClientID") } }
+    /// Read the calendar on call start to identify participants / pre-fill names.
+    @Published var calendarEnabled: Bool { didSet { defaults.set(calendarEnabled, forKey: "calendarEnabled") } }
+    /// The user's own email, used to exclude "self" from participant name suggestions.
+    @Published var calendarSelfEmail: String { didSet { defaults.set(calendarSelfEmail, forKey: "calendarSelfEmail") } }
+
     // MARK: Integrations (non-secret parts)
     @Published var githubDefaultRepo: String { didSet { defaults.set(githubDefaultRepo, forKey: "githubDefaultRepo") } }
     @Published var linearTeamKey: String { didSet { defaults.set(linearTeamKey, forKey: "linearTeamKey") } }
@@ -124,6 +132,10 @@ final class SettingsStore: ObservableObject {
         smtpUsername = defaults.string(forKey: "smtpUsername") ?? ""
         emailFromAddress = defaults.string(forKey: "emailFromAddress") ?? ""
         userDisplayName = defaults.string(forKey: "userDisplayName") ?? NSFullUserName()
+
+        googleClientID = defaults.string(forKey: "googleClientID") ?? ""
+        calendarEnabled = (defaults.object(forKey: "calendarEnabled") as? Bool) ?? false
+        calendarSelfEmail = defaults.string(forKey: "calendarSelfEmail") ?? ""
 
         githubDefaultRepo = defaults.string(forKey: "githubDefaultRepo") ?? ""
         linearTeamKey = defaults.string(forKey: "linearTeamKey") ?? ""

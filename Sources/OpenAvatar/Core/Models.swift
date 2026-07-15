@@ -22,12 +22,16 @@ struct TranscriptSegment: Codable, Identifiable, Sendable {
     let t1: TimeInterval
     let source: AudioSource
     let confidence: Double
-    /// Per-voice diarization label for the system channel, e.g. "Speaker 2".
-    /// nil → generic label. The mic channel is always "You".
+    /// Per-voice diarization label for the system channel, e.g. "Speaker 2" or
+    /// a user-assigned name. nil → generic label. The mic channel is always "You".
     var speaker: String?
+    /// Stable voice-fingerprint id (SpeakerProfile). Lets a rename retroactively
+    /// relabel every past segment of the same voice. nil for the mic channel.
+    var speakerID: String?
 
     init(id: UUID = UUID(), text: String, t0: TimeInterval, t1: TimeInterval,
-         source: AudioSource, confidence: Double, speaker: String? = nil) {
+         source: AudioSource, confidence: Double,
+         speaker: String? = nil, speakerID: String? = nil) {
         self.id = id
         self.text = text
         self.t0 = t0
@@ -35,6 +39,7 @@ struct TranscriptSegment: Codable, Identifiable, Sendable {
         self.source = source
         self.confidence = confidence
         self.speaker = speaker
+        self.speakerID = speakerID
     }
 
     var speakerLabel: String {
