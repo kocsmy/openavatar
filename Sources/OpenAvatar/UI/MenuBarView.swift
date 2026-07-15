@@ -324,7 +324,10 @@ struct DecisionRow: View {
     var body: some View {
         HStack(alignment: .top, spacing: 8) {
             Image(systemName: icon)
-                .foregroundStyle(belowThreshold ? .tertiary : .secondary)
+                .font(.body)
+                .symbolRenderingMode(.hierarchical)
+                .foregroundStyle(belowThreshold ? Color.secondary : Color.accentColor)
+                .frame(width: 22, alignment: .center)
             VStack(alignment: .leading, spacing: 2) {
                 Text(decision.summary)
                     .font(.callout)
@@ -334,7 +337,7 @@ struct DecisionRow: View {
                     .foregroundStyle(.tertiary)
                     .lineLimit(2)
             }
-            Spacer()
+            Spacer(minLength: 6)
             Button("Prepare") { app.prepare(decision) }
                 .controlSize(.small)
             Menu {
@@ -345,7 +348,9 @@ struct DecisionRow: View {
                 Image(systemName: "xmark.circle")
             }
             .menuStyle(.borderlessButton)
-            .frame(width: 24)
+            .menuIndicator(.hidden)
+            .fixedSize()
+            .help("Dismiss")
         }
         .opacity(belowThreshold ? 0.6 : 1)
     }

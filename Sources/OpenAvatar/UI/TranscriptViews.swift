@@ -218,13 +218,14 @@ enum TranscriptFormatter {
     }
 }
 
-// MARK: - Named voices library (rename any voice, past or present)
+// MARK: - Named voices library (rename / merge any voice, past or present)
 
 /// Lists every stored voice fingerprint with an editable name. Renaming here
-/// relabels that voice everywhere — all past transcripts and future calls.
+/// relabels that voice everywhere; merging folds one voice into another to fix
+/// a person who was split across several "Speaker N" entries.
 struct SpeakerLibraryView: View {
     @EnvironmentObject var app: AppState
-    /// Called after a rename so the parent can reload any visible transcript.
+    /// Called after a rename/merge so the parent can reload any visible transcript.
     var onRename: () -> Void = {}
 
     @State private var profiles: [SpeakerProfile] = []
@@ -236,7 +237,7 @@ struct SpeakerLibraryView: View {
                 Spacer()
                 Button("Refresh") { load() }.controlSize(.small)
             }
-            Text("Give a voice a name once and it's recognized in every call — past transcripts are relabeled too.")
+            Text("Name a voice once and it's recognized in every call — past transcripts are relabeled too. If one person shows up as several voices, use Merge to combine them.")
                 .font(.caption).foregroundStyle(.secondary)
 
             if profiles.isEmpty {
@@ -245,11 +246,17 @@ struct SpeakerLibraryView: View {
                     .frame(maxWidth: .infinity, minHeight: 40, alignment: .center)
             } else {
                 ForEach(profiles) { profile in
-                    SpeakerLibraryRow(profile: profile) { newName in
-                        app.renameSpeaker(id: profile.id.uuidString, to: newName)
-                        load()
-                        onRename()
-                    }
+                    SpeakerLibraryRow(
+                        profile: profile,
+                        others: profiles.filter { $0.id != profile.id },
+                        onCommit: { newName in
+                            app.renameSpeaker(id: profile.id.uuidString, to: newName)
+                            load(); onRename()
+                        },
+                        onMerge: { targetID in
+                            app.mergeSpeaker(sourceID: profile.id.uuidString, into: targetID.uuidString)
+                            load(); onRename()
+                        })
                 }
             }
         }
@@ -263,7 +270,9 @@ struct SpeakerLibraryView: View {
 
 struct SpeakerLibraryRow: View {
     let profile: SpeakerProfile
+    let others: [SpeakerProfile]
     var onCommit: (String?) -> Void
+    var onMerge: (UUID) -> Void
 
     @State private var draft = ""
 
@@ -274,7 +283,7 @@ struct SpeakerLibraryRow: View {
                 .frame(width: 9, height: 9)
             TextField("Speaker \(profile.ordinal)", text: $draft)
                 .textFieldStyle(.roundedBorder)
-                .frame(maxWidth: 200)
+                .frame(maxWidth: 180)
                 .onSubmit { onCommit(draft) }
             Button("Save") { onCommit(draft) }
                 .controlSize(.small)
@@ -282,6 +291,17 @@ struct SpeakerLibraryRow: View {
             if profile.isNamed {
                 Button("Clear") { draft = ""; onCommit(nil) }
                     .controlSize(.small)
+            }
+            if !others.isEmpty {
+                Menu("Merge into…") {
+                    ForEach(others) { target in
+                        Button(target.displayLabel) { onMerge(target.id) }
+                    }
+                }
+                .menuStyle(.button)
+                .controlSize(.small)
+                .fixedSize()
+                .help("Combine this voice into another (this one disappears)")
             }
             Text("\(profile.sampleCount) utterances")
                 .font(.caption2).foregroundStyle(.tertiary)

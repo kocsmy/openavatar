@@ -281,6 +281,60 @@ final class ContextStore: @unchecked Sendable {
         }
     }
 
+    /// Merge the `source` voice into `target`: every transcript segment of the
+    /// source is reassigned to the target, their fingerprints are blended
+    /// (weighted by how many utterances each has heard) so future speech from
+    /// either voice matches the target, and the source profile is removed. If
+    /// the target is unnamed but the source has a name, the target adopts it.
+    /// Use this to fix over-splitting — one person showing up as several voices.
+    func mergeSpeaker(_ source: UUID, into target: UUID) throws {
+        guard source != target else { return }
+        try dbQueue.write { db in
+            let rows = try Row.fetchAll(db, sql: """
+                SELECT id, name, ordinal, embedding, sample_count
+                FROM speaker_profiles WHERE id IN (?, ?)
+                """, arguments: [source.uuidString, target.uuidString])
+            var byID: [String: (name: String?, ordinal: Int, emb: [Float], n: Int)] = [:]
+            for r in rows {
+                guard let blob = r["embedding"] as Data? else { continue }
+                byID[r["id"] as String? ?? ""] = (
+                    r["name"] as String?, r["ordinal"] as Int? ?? 0,
+                    SpeakerProfile.decode(blob), r["sample_count"] as Int? ?? 1)
+            }
+            guard let s = byID[source.uuidString], let t = byID[target.uuidString] else { return }
+
+            // Blend centroids weighted by sample count (only when dimensions
+            // match; otherwise keep the target's fingerprint).
+            var blended = t.emb
+            if s.emb.count == t.emb.count, !t.emb.isEmpty {
+                let tn = Float(t.n), sn = Float(s.n)
+                for i in 0..<blended.count {
+                    blended[i] = (t.emb[i] * tn + s.emb[i] * sn) / (tn + sn)
+                }
+                var norm: Float = 0
+                for v in blended { norm += v * v }
+                norm = norm.squareRoot()
+                if norm > 0 { for i in 0..<blended.count { blended[i] /= norm } }
+            }
+            let name = (t.name?.isEmpty ?? true) ? s.name : t.name
+            try db.execute(sql: """
+                UPDATE speaker_profiles SET embedding = ?, sample_count = ?, name = ?, updated_at = ?
+                WHERE id = ?
+                """, arguments: [SpeakerProfile.encode(blended), t.n + s.n, name,
+                                 Date().timeIntervalSince1970, target.uuidString])
+
+            // Reassign the source's segments to the target and relabel them.
+            let label = (name?.isEmpty ?? true) ? "Speaker \(t.ordinal)" : name!
+            try db.execute(sql: "UPDATE transcript_segments SET speaker_id = ? WHERE speaker_id = ?",
+                           arguments: [target.uuidString, source.uuidString])
+            try db.execute(sql: "UPDATE transcript_segments SET speaker = ? WHERE speaker_id = ?",
+                           arguments: [label, target.uuidString])
+
+            try db.execute(sql: "DELETE FROM speaker_profiles WHERE id = ?",
+                           arguments: [source.uuidString])
+        }
+    }
+
     /// Rename a voice. The new name carries to every past segment of that voice
     /// (via speaker_id) and, because the fingerprint persists, to future calls.
     /// Pass nil to clear the name (revert to "Speaker N").

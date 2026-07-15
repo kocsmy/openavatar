@@ -25,7 +25,10 @@ struct DiarizedSpeaker: Sendable, Equatable {
 /// split one speaker across very different acoustic conditions.
 actor SpeakerDiarizer {
     /// Cosine similarity above which an utterance joins an existing speaker.
-    private let joinThreshold: Float = 0.80
+    /// Deliberately fairly strict: merging two *different* voices into one is the
+    /// worse, unfixable-in-place error, whereas over-splitting one voice into a
+    /// few "Speaker N" entries is easily corrected with Merge. Higher = stricter.
+    private let joinThreshold: Float = 0.84
     /// Utterances quieter/shorter than these are left as "Others".
     private let minSamples = 16_000 / 4        // 0.25 s at 16 kHz
     private let minRMS: Float = 0.006
@@ -200,7 +203,9 @@ final class EmbeddingExtractor {
         let f0 = medianPitch(samples)
         let pitchFeature = f0 > 0 ? Float((log(Double(f0)) - log(70.0)) / (log(350.0) - log(70.0))) : 0.5
         var embedding = envelope
-        embedding.append(pitchFeature * 2.0)   // weight pitch relative to envelope
+        // Pitch is one of the strongest cheap discriminators between voices, so
+        // weight it heavily relative to the spectral envelope.
+        embedding.append(pitchFeature * 3.0)
         normalize(&embedding)
         return embedding
     }
