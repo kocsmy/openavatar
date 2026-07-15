@@ -140,6 +140,54 @@ final class ContextStore {
         }
     }
 
+    // MARK: - Calls (browsing)
+
+    struct CallRecord: Identifiable {
+        let id: UUID
+        let startedAt: Date
+        let endedAt: Date?
+        let app: String?
+        let summary: String?
+    }
+
+    func listCalls(limit: Int = 200) throws -> [CallRecord] {
+        try dbQueue.read { db in
+            let rows = try Row.fetchAll(db, sql: """
+                SELECT id, started_at, ended_at, app, summary FROM calls
+                ORDER BY started_at DESC LIMIT ?
+                """, arguments: [limit])
+            return rows.compactMap { row in
+                guard let id = UUID(uuidString: row["id"] as String? ?? "") else { return nil }
+                let ended = row["ended_at"] as Double?
+                return CallRecord(
+                    id: id,
+                    startedAt: Date(timeIntervalSince1970: row["started_at"] as Double? ?? 0),
+                    endedAt: ended.map(Date.init(timeIntervalSince1970:)),
+                    app: row["app"] as String?,
+                    summary: row["summary"] as String?)
+            }
+        }
+    }
+
+    /// Full transcript of one call, ordered by time.
+    func segments(callID: UUID) throws -> [TranscriptSegment] {
+        try dbQueue.read { db in
+            let rows = try Row.fetchAll(db, sql: """
+                SELECT id, t0, t1, source, text, confidence FROM transcript_segments
+                WHERE call_id = ? ORDER BY t0
+                """, arguments: [callID.uuidString])
+            return rows.map { row in
+                TranscriptSegment(
+                    id: UUID(uuidString: row["id"] as String? ?? "") ?? UUID(),
+                    text: row["text"] as String? ?? "",
+                    t0: row["t0"] as Double? ?? 0,
+                    t1: row["t1"] as Double? ?? 0,
+                    source: AudioSource(rawValue: row["source"] as String? ?? "mic") ?? .mic,
+                    confidence: row["confidence"] as Double? ?? 0)
+            }
+        }
+    }
+
     // MARK: - Transcript
 
     func insert(_ segments: [TranscriptSegment], callID: UUID) throws {

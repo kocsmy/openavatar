@@ -6,10 +6,36 @@ struct MenuBarView: View {
     @EnvironmentObject var app: AppState
     @EnvironmentObject var settings: SettingsStore
 
+    enum PopoverTab: String, CaseIterable {
+        case actions = "Actions"
+        case transcript = "Transcript"
+    }
+    @State private var tab: PopoverTab = .actions
+
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
             header
+            Picker("", selection: $tab) {
+                ForEach(PopoverTab.allCases, id: \.self) { Text($0.rawValue).tag($0) }
+            }
+            .pickerStyle(.segmented)
+            .labelsHidden()
             Divider()
+
+            if tab == .transcript {
+                LiveTranscriptView()
+                Divider()
+                footer
+            } else {
+                actionsBody
+            }
+        }
+        .padding(12)
+        .frame(width: 420)
+    }
+
+    @ViewBuilder private var actionsBody: some View {
+        VStack(alignment: .leading, spacing: 10) {
 
             if let error = app.lastError {
                 VStack(alignment: .leading, spacing: 4) {
@@ -112,8 +138,6 @@ struct MenuBarView: View {
             Divider()
             footer
         }
-        .padding(12)
-        .frame(width: 420)
     }
 
     private var header: some View {
