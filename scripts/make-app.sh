@@ -27,6 +27,21 @@ cp Resources/Info.plist "${APP}/Contents/Info.plist"
 plutil -replace CFBundleShortVersionString -string "${VERSION}" "${APP}/Contents/Info.plist"
 plutil -replace CFBundleVersion -string "${BUILD_NUMBER}" "${APP}/Contents/Info.plist"
 
+# App icon: generate AppIcon.icns from the 1024 master via sips + iconutil.
+ICON_MASTER="design/icon-master-1024.png"
+if [[ -f "${ICON_MASTER}" ]]; then
+  echo "▸ generating AppIcon.icns"
+  ICONSET="build/AppIcon.iconset"
+  rm -rf "${ICONSET}"; mkdir -p "${ICONSET}"
+  for pair in 16:16x16 32:16x16@2x 32:32x32 64:32x32@2x 128:128x128 256:128x128@2x 256:256x256 512:256x256@2x 512:512x512 1024:512x512@2x; do
+    px="${pair%%:*}"; name="${pair##*:}"
+    sips -z "${px}" "${px}" "${ICON_MASTER}" --out "${ICONSET}/icon_${name}.png" >/dev/null
+  done
+  iconutil -c icns "${ICONSET}" -o "${APP}/Contents/Resources/AppIcon.icns"
+else
+  echo "⚠ ${ICON_MASTER} missing — building without a custom app icon"
+fi
+
 # Embed the Sparkle framework (SwiftPM binary artifact) so auto-update works
 # from the bundle.
 SPARKLE_FW="$(find .build -type d -name 'Sparkle.framework' -path '*macos*' | head -1 || true)"

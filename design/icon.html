@@ -1,0 +1,103 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<style>
+  html, body { margin: 0; padding: 0; background: transparent; }
+  #stage { width: 100vw; height: 100vh; }
+  svg { display: block; width: 100%; height: 100%; }
+</style>
+</head>
+<body>
+<div id="stage">
+<svg viewBox="0 0 1024 1024" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <!-- Warm cream background, softly lit from top -->
+    <linearGradient id="bg" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#FBF8F1"/>
+      <stop offset="1" stop-color="#EFE7D8"/>
+    </linearGradient>
+    <radialGradient id="bgGlow" cx="0.5" cy="0.4" r="0.75">
+      <stop offset="0" stop-color="#FFFDF8" stop-opacity="0.9"/>
+      <stop offset="1" stop-color="#FFFDF8" stop-opacity="0"/>
+    </radialGradient>
+
+    <!-- 3D coral sphere: lit from top-left -->
+    <radialGradient id="orb" cx="0.36" cy="0.32" r="0.85">
+      <stop offset="0" stop-color="#F6C0A9"/>
+      <stop offset="0.28" stop-color="#E8916E"/>
+      <stop offset="0.62" stop-color="#D2704E"/>
+      <stop offset="0.86" stop-color="#B44E2E"/>
+      <stop offset="1" stop-color="#9C3F24"/>
+    </radialGradient>
+    <!-- Rim light on the lower-right edge for depth -->
+    <radialGradient id="rim" cx="0.68" cy="0.74" r="0.6">
+      <stop offset="0.72" stop-color="#F4B89E" stop-opacity="0"/>
+      <stop offset="0.95" stop-color="#F7C6AE" stop-opacity="0.55"/>
+      <stop offset="1" stop-color="#F7C6AE" stop-opacity="0"/>
+    </radialGradient>
+    <!-- Specular highlight -->
+    <radialGradient id="spec" cx="0.5" cy="0.5" r="0.5">
+      <stop offset="0" stop-color="#FFFFFF" stop-opacity="0.85"/>
+      <stop offset="0.6" stop-color="#FFFFFF" stop-opacity="0.12"/>
+      <stop offset="1" stop-color="#FFFFFF" stop-opacity="0"/>
+    </radialGradient>
+    <radialGradient id="contact" cx="0.5" cy="0.5" r="0.5">
+      <stop offset="0" stop-color="#8A3C22" stop-opacity="0.35"/>
+      <stop offset="1" stop-color="#8A3C22" stop-opacity="0"/>
+    </radialGradient>
+
+    <linearGradient id="spark" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#FFF4EC"/>
+      <stop offset="1" stop-color="#FFE0CE"/>
+    </linearGradient>
+
+    <!-- macOS squircle mask -->
+    <clipPath id="squircle">
+      <path d="M512 40
+        C 196 40, 40 196, 40 512
+        C 40 828, 196 984, 512 984
+        C 828 984, 984 828, 984 512
+        C 984 196, 828 40, 512 40 Z"/>
+    </clipPath>
+  </defs>
+
+  <g clip-path="url(#squircle)">
+    <rect x="0" y="0" width="1024" height="1024" fill="url(#bg)"/>
+    <rect x="0" y="0" width="1024" height="1024" fill="url(#bgGlow)"/>
+
+    <!-- contact shadow grounding the orb -->
+    <ellipse cx="512" cy="792" rx="270" ry="70" fill="url(#contact)"/>
+
+    <!-- the 3D avatar orb -->
+    <g>
+      <circle cx="512" cy="470" r="300" fill="url(#orb)"/>
+      <circle cx="512" cy="470" r="300" fill="url(#rim)"/>
+      <!-- glossy top highlight -->
+      <ellipse cx="430" cy="330" rx="150" ry="96" fill="url(#spec)" transform="rotate(-24 430 330)"/>
+
+      <!-- friendly face -->
+      <g fill="#5C2415">
+        <ellipse cx="440" cy="452" rx="30" ry="38"/>
+        <ellipse cx="584" cy="452" rx="30" ry="38"/>
+      </g>
+      <!-- eye catch-lights -->
+      <g fill="#FFE7DA" opacity="0.9">
+        <circle cx="431" cy="440" r="9"/>
+        <circle cx="575" cy="440" r="9"/>
+      </g>
+      <!-- soft smile -->
+      <path d="M446 556 Q512 616 578 556" fill="none" stroke="#5C2415"
+            stroke-width="26" stroke-linecap="round"/>
+    </g>
+
+    <!-- Anthropic-style spark, top-right, for the AI presence -->
+    <g transform="translate(724 262)">
+      <path d="M0 -46 C 6 -14, 14 -6, 46 0 C 14 6, 6 14, 0 46 C -6 14, -14 6, -46 0 C -14 -6, -6 -14, 0 -46 Z"
+            fill="url(#spark)"/>
+    </g>
+  </g>
+</svg>
+</div>
+</body>
+</html>
