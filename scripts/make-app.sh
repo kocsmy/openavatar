@@ -30,11 +30,14 @@ plutil -replace CFBundleVersion -string "${BUILD_NUMBER}" "${APP}/Contents/Info.
 # Bake in the built-in Google OAuth client (Desktop-app type) so users get a
 # one-click "Connect Google Calendar" with no per-user Google Cloud setup.
 # Sourced from CI secrets; absent in local dev builds (app then uses BYO creds).
-if [[ -n "${GOOGLE_OAUTH_CLIENT_ID:-}" ]]; then
+if [[ -n "${GOOGLE_OAUTH_CLIENT_ID:-}" && -n "${GOOGLE_OAUTH_CLIENT_SECRET:-}" ]]; then
   plutil -replace GoogleOAuthClientID -string "${GOOGLE_OAUTH_CLIENT_ID}" "${APP}/Contents/Info.plist"
-fi
-if [[ -n "${GOOGLE_OAUTH_CLIENT_SECRET:-}" ]]; then
   plutil -replace GoogleOAuthClientSecret -string "${GOOGLE_OAUTH_CLIENT_SECRET}" "${APP}/Contents/Info.plist"
+  # Client IDs are public; the secret is never printed. This just confirms the
+  # one-click calendar client was baked in.
+  echo "▸ built-in Google OAuth client embedded (one-click calendar enabled)"
+else
+  echo "▸ no built-in Google OAuth client — calendar will use the Advanced (BYO) fields"
 fi
 
 # App icon: generate AppIcon.icns from the 1024 master via sips + iconutil.
