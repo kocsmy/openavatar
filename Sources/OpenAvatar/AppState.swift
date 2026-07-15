@@ -207,25 +207,27 @@ final class AppState: ObservableObject {
         }
     }
 
-    /// Re-open the post-call review for a call from history: loads that call's
-    /// detected decisions and shows the review window so they can still be
-    /// prepared or dismissed. Disabled while a live call is being recorded so it
-    /// can't clobber the in-progress session.
+    /// Re-open the post-call review for a call from history. Loads ONLY the
+    /// items still awaiting a decision — anything already approved, dismissed,
+    /// or executed in an earlier review stays handled and does not resurrect.
+    /// Disabled while a live call is being recorded so it can't clobber the
+    /// in-progress session.
     func reviewPastCall(_ callID: UUID) {
         guard !isListening else { return }
         let past = (try? store.decisions(callID: callID)) ?? []
         currentCallID = callID
         pendingApprovals = []
-        detectedDecisions = past
+        pendingFollowUps = []   // don't leak the last live call's follow-ups
+        detectedDecisions = past.awaitingReview
         showPostCallReview = true
 #if canImport(AppKit)
         WindowManager.shared.showPostCallReview()
 #endif
     }
 
-    /// Whether a given call has any detected decisions worth reviewing.
+    /// Whether a given call still has unhandled decisions worth reviewing.
     func hasReviewableDecisions(_ callID: UUID) -> Bool {
-        ((try? store.decisions(callID: callID)) ?? []).isEmpty == false
+        !(((try? store.decisions(callID: callID)) ?? []).awaitingReview.isEmpty)
     }
 
     // MARK: - Follow-ups (confirm in review → scheduled reminder)

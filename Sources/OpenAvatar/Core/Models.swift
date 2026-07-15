@@ -98,6 +98,13 @@ struct Decision: Codable, Identifiable, Sendable {
     var createdAt = Date()
 }
 
+extension Array where Element == Decision {
+    /// Items still awaiting the user's decision. Everything else (approved,
+    /// edited, dismissed, executed, reverted) was already handled in a review
+    /// and must not resurrect when a past call's review is re-opened.
+    var awaitingReview: [Decision] { filter { $0.status == .detected } }
+}
+
 // MARK: - Tools (shared between LLM layer and executors)
 
 struct ToolSpec: Codable, Sendable {
