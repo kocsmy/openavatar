@@ -3,18 +3,26 @@ import Foundation
 import Accelerate
 #endif
 
+/// The result of diarizing one utterance: a stable voice-fingerprint id plus
+/// the label to show (a user-assigned name, or "Speaker N").
+struct DiarizedSpeaker: Sendable, Equatable {
+    let id: UUID
+    let label: String
+}
+
 /// On-device per-voice diarization for the system-audio ("Others") channel.
 ///
-/// v1 approach — no ML model, no network: derive a compact acoustic embedding
+/// Approach — no ML model, no network: derive a compact acoustic embedding
 /// per utterance from its audio (log-mel spectral envelope + median pitch),
-/// then online-cluster embeddings by cosine similarity. Each distinct voice
-/// gets a stable "Speaker N" label for the duration of the call. The mic
+/// then match it against persistent voice fingerprints by cosine similarity.
+/// A matched voice reuses its stored profile (and its user-assigned name);
+/// an unseen voice creates a new profile. Because profiles are persisted, a
+/// name given to a voice carries across every past and future call. The mic
 /// channel is always "You" and never diarized.
 ///
 /// This is a genuine attempt, not production-grade diarization: it separates a
 /// handful of clearly-distinct voices well, but can merge similar voices or
-/// split one speaker across very different acoustic conditions. Speakers reset
-/// each call.
+/// split one speaker across very different acoustic conditions.
 actor SpeakerDiarizer {
     /// Cosine similarity above which an utterance joins an existing speaker.
     private let joinThreshold: Float = 0.80
@@ -22,51 +30,69 @@ actor SpeakerDiarizer {
     private let minSamples = 16_000 / 4        // 0.25 s at 16 kHz
     private let minRMS: Float = 0.006
 
-    private struct Speaker {
-        var id: Int
-        var centroid: [Float]
-        var count: Int
-    }
-    private var speakers: [Speaker] = []
+    private let store: ContextStore
+    /// Working set of known voice fingerprints, loaded from the store.
+    private var profiles: [SpeakerProfile] = []
+    private var loaded = false
     private let extractor = EmbeddingExtractor()
 
-    /// Assigns a speaker label to one transcript segment using the slice of
-    /// `chunk` that covers the segment's time range. Returns "Speaker N", or
-    /// nil to fall back to the generic "Others" label.
-    func label(for segment: TranscriptSegment, in chunk: AudioChunk) -> String? {
+    init(store: ContextStore = .shared) {
+        self.store = store
+    }
+
+    /// Load persisted fingerprints so voices are recognized across calls.
+    /// Called at the start of each call; cheap and idempotent.
+    func reset() {
+        profiles = (try? store.allSpeakerProfiles()) ?? []
+        loaded = true
+    }
+
+    /// Assigns a speaker to one transcript segment using the slice of `chunk`
+    /// that covers the segment's time range. Returns the matched/created voice
+    /// fingerprint and its display label, or nil to fall back to "Others".
+    func label(for segment: TranscriptSegment, in chunk: AudioChunk) -> DiarizedSpeaker? {
         guard segment.source == .system else { return nil }
+        if !loaded { reset() }
         let samples = pcmSlice(chunk: chunk, t0: segment.t0, t1: segment.t1)
         guard samples.count >= minSamples else { return nil }
         guard let embedding = extractor.embedding(samples), rms(samples) >= minRMS else { return nil }
 
-        // Nearest existing speaker by cosine similarity.
+        // Nearest known voice by cosine similarity.
         var bestIndex = -1
         var bestSim: Float = -1
-        for (i, speaker) in speakers.enumerated() {
-            let sim = cosine(embedding, speaker.centroid)
+        for (i, profile) in profiles.enumerated() {
+            let sim = cosine(embedding, profile.embedding)
             if sim > bestSim { bestSim = sim; bestIndex = i }
         }
 
         if bestIndex >= 0 && bestSim >= joinThreshold {
-            // Update the running-average centroid.
-            var s = speakers[bestIndex]
-            let n = Float(s.count)
-            for k in 0..<s.centroid.count {
-                s.centroid[k] = (s.centroid[k] * n + embedding[k]) / (n + 1)
+            // Update the running-average centroid and persist it.
+            var p = profiles[bestIndex]
+            let n = Float(p.sampleCount)
+            if p.embedding.count == embedding.count {
+                for k in 0..<p.embedding.count {
+                    p.embedding[k] = (p.embedding[k] * n + embedding[k]) / (n + 1)
+                }
             }
-            s.count += 1
-            speakers[bestIndex] = s
-            return "Speaker \(s.id)"
+            p.sampleCount += 1
+            p.updatedAt = Date()
+            profiles[bestIndex] = p
+            try? store.updateSpeakerEmbedding(id: p.id, embedding: p.embedding, sampleCount: p.sampleCount)
+            return DiarizedSpeaker(id: p.id, label: p.displayLabel)
         }
 
-        let newID = speakers.count + 1
-        speakers.append(Speaker(id: newID, centroid: embedding, count: 1))
-        return "Speaker \(newID)"
+        // Unseen voice → new persistent fingerprint.
+        let ordinal = (try? store.nextSpeakerOrdinal()) ?? (profiles.count + 1)
+        let now = Date()
+        let profile = SpeakerProfile(id: UUID(), name: nil, ordinal: ordinal,
+                                     embedding: embedding, sampleCount: 1,
+                                     createdAt: now, updatedAt: now)
+        profiles.append(profile)
+        try? store.insertSpeakerProfile(profile)
+        return DiarizedSpeaker(id: profile.id, label: profile.displayLabel)
     }
 
-    func reset() { speakers.removeAll() }
-
-    var speakerCount: Int { speakers.count }
+    var speakerCount: Int { profiles.count }
 
     // MARK: Helpers
 

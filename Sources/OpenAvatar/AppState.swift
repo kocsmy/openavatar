@@ -46,6 +46,12 @@ final class AppState: ObservableObject {
     @Published var proactiveSuggestions: [ProactiveSuggestion] = []
     @Published var isConsolidating = false
 
+    // Calendar context for the current call (who you're talking to).
+    @Published var currentEvent: CalendarEvent?
+    @Published var callAttendees: [CalendarAttendee] = []
+    /// Emails already auto-assigned to a voice this call (prevents re-prefill).
+    private var assignedAttendeeEmails: Set<String> = []
+
     let settings = SettingsStore.shared
     let store = ContextStore.shared
 
@@ -61,6 +67,8 @@ final class AppState: ObservableObject {
     private(set) lazy var proactive = ProactiveEngine(router: router, store: store)
 
     private(set) lazy var diarizer = SpeakerDiarizer()
+    private lazy var calendar = GoogleCalendarClient(
+        tokenProvider: { try await GoogleOAuth.shared.accessToken() })
     private var capture: AudioCaptureService?
     private var currentCallID: UUID?
     private var callDetectorTimer: Timer?
@@ -83,6 +91,7 @@ final class AppState: ObservableObject {
         lastError = nil
         liveSegments = []
         detectedDecisions = []
+        assignedAttendeeEmails = []
         do {
             let callID = try store.startCall(app: suggestedCallApp)
             currentCallID = callID
@@ -96,10 +105,33 @@ final class AppState: ObservableObject {
             isListening = true
             Task {
                 await detector.updateWakePhrase(settings.assistantName)
-                await diarizer.reset()   // speaker numbering restarts each call
+                await diarizer.reset()   // reload voice fingerprints for this call
             }
+            refreshCalendar()            // identify who's on the call
         } catch {
             reportError(error)
+        }
+    }
+
+    // MARK: - Calendar (who am I talking to)
+
+    /// Look up the calendar event around now and surface its attendees so their
+    /// names can pre-fill / be assigned to voices. Best-effort; never blocks.
+    func refreshCalendar() {
+        guard settings.calendarEnabled, GoogleOAuth.shared.isConnected else {
+            currentEvent = nil
+            callAttendees = []
+            return
+        }
+        Task {
+            do {
+                let event = try await calendar.currentEvent()
+                currentEvent = event
+                callAttendees = event?.others(excludingSelfEmail: settings.calendarSelfEmail) ?? []
+            } catch {
+                // Calendar is a convenience; surface but never disrupt the call.
+                reportError(error)
+            }
         }
     }
 
@@ -185,11 +217,18 @@ final class AppState: ObservableObject {
                 var segments = try await transcriber.transcribe(chunk)
                 guard !segments.isEmpty else { return }
 
-                // Per-voice diarization on the "Others" (system) channel.
+                // Per-voice diarization on the "Others" (system) channel. Each
+                // utterance is matched to a persistent voice fingerprint so a
+                // named speaker keeps their name across calls.
                 if settings.diarizationEnabled, chunk.source == .system {
                     for i in segments.indices {
-                        if let speaker = await diarizer.label(for: segments[i], in: chunk) {
-                            segments[i].speaker = speaker
+                        if let hit = await diarizer.label(for: segments[i], in: chunk) {
+                            var label = hit.label
+                            // 1:1 calls: pre-fill the single other attendee's name
+                            // onto the first unnamed voice we hear.
+                            if let prefill = await prefillName(for: hit) { label = prefill }
+                            segments[i].speaker = label
+                            segments[i].speakerID = hit.id.uuidString
                         }
                     }
                 }
@@ -207,6 +246,71 @@ final class AppState: ObservableObject {
                 reportError(error)
             }
         }
+    }
+
+    /// If exactly one other attendee is known and this is a still-unnamed voice,
+    /// assign that attendee's name to the fingerprint (carries forward). Returns
+    /// the name applied, or nil to leave the "Speaker N" label as-is.
+    private func prefillName(for hit: DiarizedSpeaker) async -> String? {
+        guard settings.calendarEnabled,
+              hit.label.hasPrefix("Speaker "),
+              callAttendees.count == 1,
+              let attendee = callAttendees.first,
+              !assignedAttendeeEmails.contains(attendee.id) else { return nil }
+        assignedAttendeeEmails.insert(attendee.id)
+        do {
+            try store.renameSpeaker(id: hit.id, to: attendee.name)
+            await diarizer.reset()   // so subsequent utterances use the new name
+            return attendee.name
+        } catch {
+            reportError(error)
+            return nil
+        }
+    }
+
+    // MARK: - Speakers in the current call (for the editable roster UI)
+
+    struct CallSpeaker: Identifiable, Equatable {
+        let id: String          // speaker fingerprint id (UUID string)
+        var label: String
+        var segmentCount: Int
+    }
+
+    /// Distinct system-channel voices heard so far this call, in first-heard order.
+    var callSpeakers: [CallSpeaker] {
+        var order: [String] = []
+        var map: [String: CallSpeaker] = [:]
+        for seg in liveSegments where seg.source == .system {
+            guard let sid = seg.speakerID else { continue }
+            if var existing = map[sid] {
+                existing.segmentCount += 1
+                existing.label = seg.speaker ?? existing.label
+                map[sid] = existing
+            } else {
+                map[sid] = CallSpeaker(id: sid, label: seg.speaker ?? "Others", segmentCount: 1)
+                order.append(sid)
+            }
+        }
+        return order.compactMap { map[$0] }
+    }
+
+    /// Rename (or clear, with nil) a voice. Persists to the fingerprint so the
+    /// name applies to this call's transcript, every past call, and future calls.
+    func renameSpeaker(id: String, to name: String?) {
+        guard let uuid = UUID(uuidString: id) else { return }
+        do {
+            try store.renameSpeaker(id: uuid, to: name)
+        } catch {
+            reportError(error)
+            return
+        }
+        let resolved = (try? store.allSpeakerProfiles())?.first { $0.id == uuid }?.displayLabel
+        if let resolved {
+            for i in liveSegments.indices where liveSegments[i].speakerID == id {
+                liveSegments[i].speaker = resolved
+            }
+        }
+        Task { await diarizer.reset() }   // reload names for ongoing diarization
     }
 
     private func makeTranscriber() -> Transcriber {

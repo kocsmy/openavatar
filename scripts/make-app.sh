@@ -39,27 +39,34 @@ else
   echo "⚠ Sparkle.framework not found in .build — auto-update disabled in this build"
 fi
 
-echo "▸ codesign (ad-hoc, with entitlements)"
-# Sign nested frameworks first, then the app with the keychain-access-group
-# entitlement so the data-protection keychain grants silent access to our
-# own items (no repeated login-keychain password prompts across updates).
+echo "▸ codesign (ad-hoc, no entitlements)"
+# We ad-hoc sign with NO custom entitlements. keychain-access-groups is a
+# restricted entitlement that macOS only honors under a real Apple Developer
+# team signature; on an ad-hoc (teamless) signature the integrity daemon (AMFI)
+# rejects it and the whole app fails to launch ("OpenAvatar.app can't be
+# opened"). KeychainStore uses the legacy keychain, which needs no entitlement.
 #
 # CRITICAL: Sparkle.framework ships nested helper binaries (Autoupdate,
 # Updater.app, XPCServices/*.xpc). They must each be validly signed or macOS
-# refuses to launch the whole app ("OpenAvatar.app can't be opened"). --deep
-# signs every nested executable inside the framework in one pass; without it
-# only the framework's own Mach-O gets a signature and the helpers stay
-# unsigned. Sign nested items before the outer bundle that references them.
+# refuses to launch the whole app. --deep signs every nested executable inside
+# the framework in one pass. Sign nested items before the outer bundle.
 find "${APP}/Contents/Frameworks" -name '*.framework' -maxdepth 1 -print 2>/dev/null | while read -r fw; do
   codesign --force --deep --sign - "${fw}"
 done
-codesign --force --sign - \
-  --entitlements Resources/OpenAvatar.entitlements \
-  --identifier com.openavatar.app \
-  "${APP}"
+codesign --force --sign - --identifier com.openavatar.app "${APP}"
 
-echo "▸ verifying signature (Gatekeeper launch validity)"
+echo "▸ verifying signature (launch validity)"
 codesign --verify --deep --strict --verbose=2 "${APP}"
+
+# Guard against the v1.4.x regression: a restricted entitlement on an ad-hoc
+# signature makes AMFI refuse to launch the app. Fail the build if any
+# entitlement (esp. keychain-access-groups) sneaks back in.
+echo "▸ asserting no restricted entitlements"
+ENTS="$(codesign -d --entitlements - --xml "${APP}" 2>/dev/null || true)"
+if printf '%s' "${ENTS}" | grep -q "keychain-access-groups"; then
+  echo "::error::${APP} carries a keychain-access-groups entitlement; ad-hoc signing + AMFI will block launch. Remove it."
+  exit 1
+fi
 
 echo "✓ Built ${APP}"
 echo "  Run with: open ${APP}"

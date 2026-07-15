@@ -4,7 +4,7 @@ import GRDB
 /// The compounding context store (spec §4.9). SQLite via GRDB.
 /// Transcripts, decisions, actions, outcomes, entities, metrics — all local.
 /// Tokens/keys are NEVER stored here (Keychain only).
-final class ContextStore {
+final class ContextStore: @unchecked Sendable {
     static let shared = try! ContextStore(path: AppPaths.database.path)
 
     let dbQueue: DatabaseQueue
@@ -120,6 +120,24 @@ final class ContextStore {
         migrator.registerMigration("v3-speaker") { db in
             try db.execute(sql: "ALTER TABLE transcript_segments ADD COLUMN speaker TEXT")
         }
+        // v4 — persistent voice fingerprints: a speaker's name is stored against
+        // its acoustic embedding and carries across every call. Segments keep a
+        // stable speaker_id so renaming a voice relabels its whole history.
+        migrator.registerMigration("v4-speaker-profiles") { db in
+            try db.execute(sql: """
+                CREATE TABLE speaker_profiles (
+                    id TEXT PRIMARY KEY,
+                    name TEXT,
+                    ordinal INTEGER NOT NULL,
+                    embedding BLOB NOT NULL,
+                    sample_count INTEGER NOT NULL DEFAULT 1,
+                    created_at REAL NOT NULL,
+                    updated_at REAL NOT NULL
+                );
+                ALTER TABLE transcript_segments ADD COLUMN speaker_id TEXT;
+                CREATE INDEX idx_segments_speaker ON transcript_segments(speaker_id);
+                """)
+        }
         try migrator.migrate(dbQueue)
     }
 
@@ -177,20 +195,23 @@ final class ContextStore {
     func segments(callID: UUID) throws -> [TranscriptSegment] {
         try dbQueue.read { db in
             let rows = try Row.fetchAll(db, sql: """
-                SELECT id, t0, t1, source, text, confidence, speaker FROM transcript_segments
+                SELECT id, t0, t1, source, text, confidence, speaker, speaker_id FROM transcript_segments
                 WHERE call_id = ? ORDER BY t0
                 """, arguments: [callID.uuidString])
-            return rows.map { row in
-                TranscriptSegment(
-                    id: UUID(uuidString: row["id"] as String? ?? "") ?? UUID(),
-                    text: row["text"] as String? ?? "",
-                    t0: row["t0"] as Double? ?? 0,
-                    t1: row["t1"] as Double? ?? 0,
-                    source: AudioSource(rawValue: row["source"] as String? ?? "mic") ?? .mic,
-                    confidence: row["confidence"] as Double? ?? 0,
-                    speaker: row["speaker"] as String?)
-            }
+            return rows.map(Self.segment(from:))
         }
+    }
+
+    private static func segment(from row: Row) -> TranscriptSegment {
+        TranscriptSegment(
+            id: UUID(uuidString: row["id"] as String? ?? "") ?? UUID(),
+            text: row["text"] as String? ?? "",
+            t0: row["t0"] as Double? ?? 0,
+            t1: row["t1"] as Double? ?? 0,
+            source: AudioSource(rawValue: row["source"] as String? ?? "mic") ?? .mic,
+            confidence: row["confidence"] as Double? ?? 0,
+            speaker: row["speaker"] as String?,
+            speakerID: row["speaker_id"] as String?)
     }
 
     // MARK: - Transcript
@@ -200,11 +221,85 @@ final class ContextStore {
             for s in segments {
                 try db.execute(
                     sql: """
-                    INSERT INTO transcript_segments (id, call_id, t0, t1, source, text, confidence, speaker)
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                    INSERT INTO transcript_segments (id, call_id, t0, t1, source, text, confidence, speaker, speaker_id)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
                     """,
                     arguments: [s.id.uuidString, callID.uuidString, s.t0, s.t1,
-                                s.source.rawValue, s.text, s.confidence, s.speaker])
+                                s.source.rawValue, s.text, s.confidence, s.speaker, s.speakerID])
+            }
+        }
+    }
+
+    // MARK: - Speaker profiles (persistent voice fingerprints)
+
+    func allSpeakerProfiles() throws -> [SpeakerProfile] {
+        try dbQueue.read { db in
+            let rows = try Row.fetchAll(db, sql: """
+                SELECT id, name, ordinal, embedding, sample_count, created_at, updated_at
+                FROM speaker_profiles ORDER BY ordinal
+                """)
+            return rows.compactMap { row in
+                guard let id = UUID(uuidString: row["id"] as String? ?? ""),
+                      let blob = row["embedding"] as Data? else { return nil }
+                return SpeakerProfile(
+                    id: id,
+                    name: row["name"] as String?,
+                    ordinal: row["ordinal"] as Int? ?? 0,
+                    embedding: SpeakerProfile.decode(blob),
+                    sampleCount: row["sample_count"] as Int? ?? 1,
+                    createdAt: Date(timeIntervalSince1970: row["created_at"] as Double? ?? 0),
+                    updatedAt: Date(timeIntervalSince1970: row["updated_at"] as Double? ?? 0))
+            }
+        }
+    }
+
+    /// Next friendly ordinal for a new voice ("Speaker N").
+    func nextSpeakerOrdinal() throws -> Int {
+        try dbQueue.read { db in
+            (try Int.fetchOne(db, sql: "SELECT MAX(ordinal) FROM speaker_profiles") ?? 0) + 1
+        }
+    }
+
+    func insertSpeakerProfile(_ p: SpeakerProfile) throws {
+        try dbQueue.write { db in
+            try db.execute(sql: """
+                INSERT INTO speaker_profiles (id, name, ordinal, embedding, sample_count, created_at, updated_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?)
+                """, arguments: [p.id.uuidString, p.name, p.ordinal,
+                                 SpeakerProfile.encode(p.embedding), p.sampleCount,
+                                 p.createdAt.timeIntervalSince1970, p.updatedAt.timeIntervalSince1970])
+        }
+    }
+
+    /// Persist an updated running-average centroid after a match.
+    func updateSpeakerEmbedding(id: UUID, embedding: [Float], sampleCount: Int) throws {
+        try dbQueue.write { db in
+            try db.execute(sql: """
+                UPDATE speaker_profiles SET embedding = ?, sample_count = ?, updated_at = ? WHERE id = ?
+                """, arguments: [SpeakerProfile.encode(embedding), sampleCount,
+                                 Date().timeIntervalSince1970, id.uuidString])
+        }
+    }
+
+    /// Rename a voice. The new name carries to every past segment of that voice
+    /// (via speaker_id) and, because the fingerprint persists, to future calls.
+    /// Pass nil to clear the name (revert to "Speaker N").
+    func renameSpeaker(id: UUID, to name: String?) throws {
+        let clean = name?.trimmingCharacters(in: .whitespacesAndNewlines)
+        let finalName = (clean?.isEmpty ?? true) ? nil : clean
+        try dbQueue.write { db in
+            try db.execute(sql: "UPDATE speaker_profiles SET name = ?, updated_at = ? WHERE id = ?",
+                           arguments: [finalName, Date().timeIntervalSince1970, id.uuidString])
+            // Relabel past transcript segments. When cleared, fall back to the
+            // stored ordinal so the row reads "Speaker N" again.
+            if let finalName {
+                try db.execute(sql: "UPDATE transcript_segments SET speaker = ? WHERE speaker_id = ?",
+                               arguments: [finalName, id.uuidString])
+            } else if let ordinal = try Int.fetchOne(db,
+                        sql: "SELECT ordinal FROM speaker_profiles WHERE id = ?",
+                        arguments: [id.uuidString]) {
+                try db.execute(sql: "UPDATE transcript_segments SET speaker = ? WHERE speaker_id = ?",
+                               arguments: ["Speaker \(ordinal)", id.uuidString])
             }
         }
     }
@@ -352,21 +447,12 @@ final class ContextStore {
     func recentSegments(callID: UUID, seconds: TimeInterval) throws -> [TranscriptSegment] {
         try dbQueue.read { db in
             let rows = try Row.fetchAll(db, sql: """
-                SELECT id, t0, t1, source, text, confidence, speaker FROM transcript_segments
+                SELECT id, t0, t1, source, text, confidence, speaker, speaker_id FROM transcript_segments
                 WHERE call_id = ?
                   AND t1 >= (SELECT MAX(t1) FROM transcript_segments WHERE call_id = ?) - ?
                 ORDER BY t0
                 """, arguments: [callID.uuidString, callID.uuidString, seconds])
-            return rows.map { row in
-                TranscriptSegment(
-                    id: UUID(uuidString: row["id"] as String? ?? "") ?? UUID(),
-                    text: row["text"] as String? ?? "",
-                    t0: row["t0"] as Double? ?? 0,
-                    t1: row["t1"] as Double? ?? 0,
-                    source: AudioSource(rawValue: row["source"] as String? ?? "mic") ?? .mic,
-                    confidence: row["confidence"] as Double? ?? 0,
-                    speaker: row["speaker"] as String?)
-            }
+            return rows.map(Self.segment(from:))
         }
     }
 
@@ -391,7 +477,7 @@ final class ContextStore {
             var export: [String: JSONValue] = [:]
             let tables = ["calls", "transcript_segments", "decisions", "actions",
                           "entities", "metrics_daily", "llm_usage",
-                          "call_digests", "memory_facts"]
+                          "call_digests", "memory_facts", "speaker_profiles"]
             for table in tables {
                 let rows = try Row.fetchAll(db, sql: "SELECT * FROM \(table)")
                 export[table] = .array(rows.map { row in
@@ -416,7 +502,7 @@ final class ContextStore {
         try dbQueue.write { db in
             for table in ["calls", "transcript_segments", "decisions", "actions",
                           "entities", "metrics_daily", "llm_usage",
-                          "call_digests", "memory_facts"] {
+                          "call_digests", "memory_facts", "speaker_profiles"] {
                 try db.execute(sql: "DELETE FROM \(table)")
             }
         }

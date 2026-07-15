@@ -12,6 +12,8 @@ struct SettingsView: View {
                 .tabItem { Label("Models", systemImage: "brain") }
             IntegrationsSettingsTab()
                 .tabItem { Label("Integrations", systemImage: "puzzlepiece.extension") }
+            CalendarSettingsTab()
+                .tabItem { Label("Calendar", systemImage: "calendar") }
             TrustMatrixTab()
                 .tabItem { Label("Trust", systemImage: "checkmark.shield") }
             MemorySettingsTab()
@@ -216,6 +218,142 @@ struct SecretField: View {
             } else if saved {
                 Image(systemName: "key.fill").foregroundStyle(.green)
                     .help("A token is saved in the Keychain")
+            }
+        }
+    }
+}
+
+// MARK: - Calendar (Google)
+
+struct CalendarSettingsTab: View {
+    @EnvironmentObject var settings: SettingsStore
+
+    @State private var clientSecret = ""
+    @State private var clientSecretSaved = KeychainStore.shared.get(.googleClientSecret) != nil
+    @State private var connected = GoogleOAuth.shared.isConnected
+    @State private var connecting = false
+    @State private var status: String?
+    @State private var eventPreview: String?
+
+    var body: some View {
+        Form {
+            Section("Google Calendar") {
+                Toggle("Identify who's on the call from my calendar", isOn: $settings.calendarEnabled)
+                Text("When you start listening, OpenAvatar looks up the current event and offers each attendee's name to label the voices it hears. On a 1:1 it pre-fills the other person automatically.")
+                    .font(.caption).foregroundStyle(.secondary)
+            }
+
+            Section("Connection") {
+                if connected {
+                    HStack {
+                        Label("Connected to Google Calendar", systemImage: "checkmark.seal.fill")
+                            .foregroundStyle(.green)
+                        Spacer()
+                        Button("Disconnect") {
+                            Task {
+                                await GoogleOAuth.shared.disconnect()
+                                connected = false
+                                status = "Disconnected."
+                                eventPreview = nil
+                            }
+                        }
+                    }
+                    Button {
+                        testFetch()
+                    } label: {
+                        Label("Test — read my current event", systemImage: "arrow.clockwise")
+                    }
+                    .disabled(connecting)
+                    if let eventPreview {
+                        Text(eventPreview).font(.caption).foregroundStyle(.secondary)
+                    }
+                } else {
+                    Button {
+                        connect()
+                    } label: {
+                        if connecting { ProgressView().controlSize(.small) }
+                        else { Label("Connect Google Calendar", systemImage: "person.badge.key") }
+                    }
+                    .disabled(connecting || !isConfigured)
+                    if !isConfigured {
+                        Text("Enter your OAuth client ID and secret below first.")
+                            .font(.caption).foregroundStyle(.orange)
+                    }
+                }
+                if let status {
+                    Text(status).font(.caption).foregroundStyle(.secondary)
+                        .textSelection(.enabled)
+                }
+            }
+
+            Section("OAuth credentials (from your Google Cloud project)") {
+                TextField("Client ID", text: $settings.googleClientID)
+                    .textFieldStyle(.roundedBorder)
+                SecretField(label: "Client secret", text: $clientSecret, saved: $clientSecretSaved) {
+                    KeychainStore.shared.set(clientSecret, for: .googleClientSecret)
+                }
+                TextField("My email (excluded from attendee suggestions)", text: $settings.calendarSelfEmail)
+                    .textFieldStyle(.roundedBorder)
+            }
+
+            Section("Setup") {
+                Text("""
+                1. In Google Cloud Console, create an OAuth client of type **Desktop app**.
+                2. Enable the **Google Calendar API** for the project.
+                3. Paste the client ID and client secret above.
+                4. Click Connect and approve read-only calendar access.
+                Tokens are stored in your Keychain; OpenAvatar only ever reads events, never writes.
+                """)
+                .font(.caption).foregroundStyle(.secondary)
+                Button("Open Google Cloud Console") {
+#if canImport(AppKit)
+                    if let url = URL(string: "https://console.cloud.google.com/apis/credentials") {
+                        NSWorkspace.shared.open(url)
+                    }
+#endif
+                }
+            }
+        }
+        .formStyle(.grouped)
+        .padding()
+    }
+
+    private var isConfigured: Bool {
+        !settings.googleClientID.trimmingCharacters(in: .whitespaces).isEmpty && clientSecretSaved
+    }
+
+    private func connect() {
+        connecting = true
+        status = "Opening your browser to sign in…"
+        Task {
+            defer { connecting = false }
+            do {
+                try await GoogleOAuth.shared.connect()
+                connected = true
+                status = "Connected. Calendar look-up is ready."
+            } catch {
+                status = Redactor.redact(error.localizedDescription)
+            }
+        }
+    }
+
+    private func testFetch() {
+        connecting = true
+        eventPreview = "Reading…"
+        Task {
+            defer { connecting = false }
+            do {
+                let client = GoogleCalendarClient(
+                    tokenProvider: { try await GoogleOAuth.shared.accessToken() })
+                if let event = try await client.currentEvent() {
+                    let names = event.others(excludingSelfEmail: settings.calendarSelfEmail)
+                        .map(\.name).joined(separator: ", ")
+                    eventPreview = "“\(event.title)” — \(names.isEmpty ? "no other attendees" : names)"
+                } else {
+                    eventPreview = "No event scheduled around now."
+                }
+            } catch {
+                eventPreview = Redactor.redact(error.localizedDescription)
             }
         }
     }
