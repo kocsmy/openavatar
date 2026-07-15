@@ -191,7 +191,7 @@ enum TranscriptFormatter {
     /// app launches — unlike Swift's per-run String.hashValue).
     static func color(forSpeakerID id: String, label: String? = nil) -> Color {
         var hash: UInt64 = 5381
-        for byte in id.utf8 { hash = (hash &* 33) &^ UInt64(byte) }
+        for byte in id.utf8 { hash = (hash &* 33) ^ UInt64(byte) }
         return speakerPalette[Int(hash % UInt64(speakerPalette.count))]
     }
 

@@ -74,7 +74,7 @@ actor GoogleOAuth {
         let verifier = Self.randomURLSafe(bytes: 48)
         let challenge = Self.codeChallenge(for: verifier)
 
-        let listener = try LoopbackRedirectListener()
+        let listener = LoopbackRedirectListener()
         let port = try await listener.start()
         let redirectURI = "http://127.0.0.1:\(port)"
 
@@ -223,7 +223,8 @@ actor LoopbackRedirectListener {
     private var listener: NWListener?
     private var continuation: CheckedContinuation<String, Error>?
     private var finished = false
-    private let queue = DispatchQueue(label: "com.openavatar.oauth.loopback")
+    // nonisolated so the Network callbacks (which run off-actor) can read it.
+    private nonisolated let queue = DispatchQueue(label: "com.openavatar.oauth.loopback")
 
     /// Binds an ephemeral loopback port and returns it.
     func start() async throws -> UInt16 {
