@@ -22,8 +22,24 @@ struct TranscriptSegment: Codable, Identifiable, Sendable {
     let t1: TimeInterval
     let source: AudioSource
     let confidence: Double
+    /// Per-voice diarization label for the system channel, e.g. "Speaker 2".
+    /// nil → generic label. The mic channel is always "You".
+    var speaker: String?
 
-    var speakerLabel: String { source == .mic ? "You" : "Others" }
+    init(id: UUID = UUID(), text: String, t0: TimeInterval, t1: TimeInterval,
+         source: AudioSource, confidence: Double, speaker: String? = nil) {
+        self.id = id
+        self.text = text
+        self.t0 = t0
+        self.t1 = t1
+        self.source = source
+        self.confidence = confidence
+        self.speaker = speaker
+    }
+
+    var speakerLabel: String {
+        source == .mic ? "You" : (speaker ?? "Others")
+    }
 }
 
 // MARK: - Decisions

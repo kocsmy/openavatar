@@ -64,6 +64,8 @@ final class SettingsStore: ObservableObject {
     @Published var cloudSTTModel: String { didSet { defaults.set(cloudSTTModel, forKey: "cloudSTTModel") } }
     /// "auto" detects language per chunk; or a whisper code like "hu", "en".
     @Published var transcriptionLanguage: String { didSet { defaults.set(transcriptionLanguage, forKey: "transcriptionLanguage") } }
+    /// Per-voice diarization on the system-audio channel (Speaker 1/2/3…).
+    @Published var diarizationEnabled: Bool { didSet { defaults.set(diarizationEnabled, forKey: "diarizationEnabled") } }
 
     // MARK: LLM
     @Published var openAIBaseURL: String { didSet { defaults.set(openAIBaseURL, forKey: "openAIBaseURL") } }
@@ -105,6 +107,7 @@ final class SettingsStore: ObservableObject {
         cloudSTTBaseURL = defaults.string(forKey: "cloudSTTBaseURL") ?? "https://api.openai.com/v1"
         cloudSTTModel = defaults.string(forKey: "cloudSTTModel") ?? "whisper-1"
         transcriptionLanguage = defaults.string(forKey: "transcriptionLanguage") ?? "auto"
+        diarizationEnabled = (defaults.object(forKey: "diarizationEnabled") as? Bool) ?? true
 
         openAIBaseURL = defaults.string(forKey: "openAIBaseURL") ?? "https://api.openai.com/v1"
         ollamaBaseURL = defaults.string(forKey: "ollamaBaseURL") ?? "http://localhost:11434"

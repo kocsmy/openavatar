@@ -116,6 +116,10 @@ final class ContextStore {
                 CREATE INDEX idx_facts_status ON memory_facts(status, category);
                 """)
         }
+        // v3 — per-voice diarization label on each transcript segment.
+        migrator.registerMigration("v3-speaker") { db in
+            try db.execute(sql: "ALTER TABLE transcript_segments ADD COLUMN speaker TEXT")
+        }
         try migrator.migrate(dbQueue)
     }
 
@@ -173,7 +177,7 @@ final class ContextStore {
     func segments(callID: UUID) throws -> [TranscriptSegment] {
         try dbQueue.read { db in
             let rows = try Row.fetchAll(db, sql: """
-                SELECT id, t0, t1, source, text, confidence FROM transcript_segments
+                SELECT id, t0, t1, source, text, confidence, speaker FROM transcript_segments
                 WHERE call_id = ? ORDER BY t0
                 """, arguments: [callID.uuidString])
             return rows.map { row in
@@ -183,7 +187,8 @@ final class ContextStore {
                     t0: row["t0"] as Double? ?? 0,
                     t1: row["t1"] as Double? ?? 0,
                     source: AudioSource(rawValue: row["source"] as String? ?? "mic") ?? .mic,
-                    confidence: row["confidence"] as Double? ?? 0)
+                    confidence: row["confidence"] as Double? ?? 0,
+                    speaker: row["speaker"] as String?)
             }
         }
     }
@@ -195,11 +200,11 @@ final class ContextStore {
             for s in segments {
                 try db.execute(
                     sql: """
-                    INSERT INTO transcript_segments (id, call_id, t0, t1, source, text, confidence)
-                    VALUES (?, ?, ?, ?, ?, ?, ?)
+                    INSERT INTO transcript_segments (id, call_id, t0, t1, source, text, confidence, speaker)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?)
                     """,
                     arguments: [s.id.uuidString, callID.uuidString, s.t0, s.t1,
-                                s.source.rawValue, s.text, s.confidence])
+                                s.source.rawValue, s.text, s.confidence, s.speaker])
             }
         }
     }
@@ -347,7 +352,7 @@ final class ContextStore {
     func recentSegments(callID: UUID, seconds: TimeInterval) throws -> [TranscriptSegment] {
         try dbQueue.read { db in
             let rows = try Row.fetchAll(db, sql: """
-                SELECT id, t0, t1, source, text, confidence FROM transcript_segments
+                SELECT id, t0, t1, source, text, confidence, speaker FROM transcript_segments
                 WHERE call_id = ?
                   AND t1 >= (SELECT MAX(t1) FROM transcript_segments WHERE call_id = ?) - ?
                 ORDER BY t0
@@ -359,7 +364,8 @@ final class ContextStore {
                     t0: row["t0"] as Double? ?? 0,
                     t1: row["t1"] as Double? ?? 0,
                     source: AudioSource(rawValue: row["source"] as String? ?? "mic") ?? .mic,
-                    confidence: row["confidence"] as Double? ?? 0)
+                    confidence: row["confidence"] as Double? ?? 0,
+                    speaker: row["speaker"] as String?)
             }
         }
     }

@@ -106,6 +106,11 @@ struct TranscriptionSettingsTab: View {
                 Text("Auto-detect handles multilingual calls (e.g. mixing Hungarian and English). Local mode needs the multilingual model — the auto-setup below installs it.")
                     .font(.caption).foregroundStyle(.secondary)
             }
+            Section("Speakers") {
+                Toggle("Distinguish individual speakers", isOn: $settings.diarizationEnabled)
+                Text("On-device per-voice diarization labels each participant on the call (Speaker 1, Speaker 2…) — your own mic is always \"You\". Works fully offline; best with a few clearly-distinct voices.")
+                    .font(.caption).foregroundStyle(.secondary)
+            }
             if settings.transcriptionMode == .local {
                 Section("Local transcription (whisper.cpp)") {
                     WhisperSetupView(service: whisperSetup)
