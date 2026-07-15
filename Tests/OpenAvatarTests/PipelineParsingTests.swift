@@ -16,10 +16,11 @@ final class PipelineParsingTests: XCTestCase {
         let args = try JSONValue.parse("""
         {"decisions":[
           {"quote":"Let's create a ticket for the login bug","intent":"create_ticket",
-           "summary":"Create login bug ticket","confidence":0.85,"addressed_to_assistant":false},
+           "summary":"Create login bug ticket","assignee":"user","confidence":0.85,
+           "addressed_to_assistant":false},
           {"quote":"merge the header PR","intent":"merge_pr",
-           "summary":"Merge header PR","confidence":0.7,"addressed_to_assistant":false,
-           "assignee_hint":"sam"}
+           "summary":"Merge header PR","assignee":"user","confidence":0.7,
+           "addressed_to_assistant":false,"assignee_hint":"sam"}
         ]}
         """)
         let decisions = DecisionDetector.parseDecisions(args, callID: UUID(), window: window)
@@ -36,7 +37,7 @@ final class PipelineParsingTests: XCTestCase {
 
     func testParseDecisionsToleratesUnknownIntent() throws {
         let args = try JSONValue.parse("""
-        {"decisions":[{"quote":"q","intent":"do_magic","summary":"s",
+        {"decisions":[{"quote":"q","intent":"do_magic","summary":"s","assignee":"user",
                        "confidence":0.5,"addressed_to_assistant":true}]}
         """)
         let decisions = DecisionDetector.parseDecisions(args, callID: nil, window: [])
