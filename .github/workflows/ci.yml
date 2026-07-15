@@ -15,30 +15,57 @@ on:
 permissions:
   contents: write # tag pushes create releases with the DMG attached
 
+# One in-flight run per ref: a new push cancels the previous run instead of
+# queueing behind it.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   build-and-test:
     name: Build & test (macOS)
     runs-on: macos-15
     timeout-minutes: 30
+    # Only tag pushes or a manual dispatch carrying a release_tag package the app.
+    # Ordinary branch pushes / PRs stop after build + test.
+    env:
+      IS_RELEASE: ${{ startsWith(github.ref, 'refs/tags/v') || (github.event_name == 'workflow_dispatch' && inputs.release_tag != '') }}
     steps:
       - uses: actions/checkout@v4
 
       - name: Swift version
         run: swift --version && xcodebuild -version
 
-      - name: Build
-        run: swift build
+      # Reuse compiled dependencies + SwiftPM's clone/artifact caches across runs.
+      # Keyed on the dependency manifest; falls back to the newest partial cache.
+      - name: Cache SwiftPM build
+        uses: actions/cache@v4
+        with:
+          path: |
+            .build
+            ~/Library/Caches/org.swift.swiftpm
+          key: ${{ runner.os }}-spm-${{ hashFiles('Package.swift') }}
+          restore-keys: |
+            ${{ runner.os }}-spm-
+
+      # Compile the package AND the test target in one pass, then run tests
+      # without a second compile.
+      - name: Build (incl. tests)
+        run: swift build --build-tests
 
       - name: Test
-        run: swift test
+        run: swift test --skip-build
 
       - name: Assemble app bundle
+        if: env.IS_RELEASE == 'true'
         run: ./scripts/make-app.sh release
 
       - name: Build DMG installer
+        if: env.IS_RELEASE == 'true'
         run: ./scripts/make-dmg.sh
 
       - name: Upload DMG artifact
+        if: env.IS_RELEASE == 'true'
         uses: actions/upload-artifact@v4
         with:
           name: OpenAvatar-dmg
@@ -46,7 +73,7 @@ jobs:
           if-no-files-found: error
 
       - name: Release (on version tags, or manual dispatch with release_tag)
-        if: startsWith(github.ref, 'refs/tags/v') || (github.event_name == 'workflow_dispatch' && inputs.release_tag != '')
+        if: env.IS_RELEASE == 'true'
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           TAG: ${{ startsWith(github.ref, 'refs/tags/v') && github.ref_name || inputs.release_tag }}
