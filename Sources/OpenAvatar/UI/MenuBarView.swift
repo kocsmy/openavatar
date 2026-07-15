@@ -48,18 +48,20 @@ struct MenuBarView: View {
             .padding(.top, 12)
             .padding(.bottom, 4)
 
-            if tab == .transcript {
-                LiveTranscriptView()
-                    .padding(.horizontal, 14)
-                    .padding(.bottom, 14)
-            } else if actionsMetrics.needsScroll {
-                // Tall content → cap and scroll internally.
-                ScrollView { actionsContent.padding(14) }
-                    .frame(height: PopoverLayout.maxContentHeight)
-            } else {
-                // Short content → size to it naturally (no blank space).
-                actionsContent.padding(14)
+            // A shared minimum height keeps both tabs the same size in their
+            // empty/idle state, so switching tabs doesn't resize the menu-bar
+            // window and leave a gap between the popover and the menu-bar icon.
+            Group {
+                if tab == .transcript {
+                    LiveTranscriptView().padding(14)
+                } else if actionsMetrics.needsScroll {
+                    ScrollView { actionsContent.padding(14) }
+                        .frame(height: PopoverLayout.maxContentHeight)
+                } else {
+                    actionsContent.padding(14)
+                }
             }
+            .frame(minHeight: PopoverLayout.minContentHeight, alignment: .top)
 
             Divider()
             footer
@@ -339,6 +341,9 @@ struct MenuBarView: View {
 /// and left a large blank area under short content). Pure and unit-tested.
 enum PopoverLayout {
     static let maxContentHeight: CGFloat = 440
+    /// Shared floor for both tabs' content so switching tabs in the idle state
+    /// doesn't resize the menu-bar window (which leaves a gap under the icon).
+    static let minContentHeight: CGFloat = 150
 
     struct Metrics: Equatable {
         var hasCallSuggestion: Bool
