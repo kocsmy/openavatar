@@ -52,15 +52,39 @@ actor GoogleOAuth {
     private var cachedAccessToken: String?
     private var accessTokenExpiry: Date = .distantPast
 
-    private var clientID: String { SettingsStore.shared.googleClientID.trimmingCharacters(in: .whitespaces) }
-    private var clientSecret: String? { KeychainStore.shared.get(.googleClientSecret) }
+    // Built-in OAuth client, baked into release builds at package time from the
+    // GOOGLE_OAUTH_CLIENT_ID / GOOGLE_OAUTH_CLIENT_SECRET CI secrets (Google's
+    // Desktop-app clients are designed to ship their client secret inside the
+    // app; PKCE protects the flow). When present, users just click "Connect" —
+    // no per-user Google Cloud project needed. Users may still override with
+    // their own client via Settings.
+    static var builtInClientID: String? {
+        (Bundle.main.object(forInfoDictionaryKey: "GoogleOAuthClientID") as? String)
+            .flatMap { $0.isEmpty ? nil : $0 }
+    }
+    static var builtInClientSecret: String? {
+        (Bundle.main.object(forInfoDictionaryKey: "GoogleOAuthClientSecret") as? String)
+            .flatMap { $0.isEmpty ? nil : $0 }
+    }
+    static var hasBuiltInClient: Bool { builtInClientID != nil && builtInClientSecret != nil }
+
+    /// Built-in credentials win; otherwise fall back to a user-supplied client.
+    private var clientID: String {
+        Self.builtInClientID ?? SettingsStore.shared.googleClientID.trimmingCharacters(in: .whitespaces)
+    }
+    private var clientSecret: String? {
+        Self.builtInClientSecret ?? KeychainStore.shared.get(.googleClientSecret)
+    }
+
+    nonisolated var hasBuiltInClient: Bool { Self.hasBuiltInClient }
 
     nonisolated var isConnected: Bool {
         KeychainStore.shared.get(.googleCalendarRefreshToken) != nil
     }
 
     nonisolated var isConfigured: Bool {
-        !SettingsStore.shared.googleClientID.trimmingCharacters(in: .whitespaces).isEmpty
+        if Self.hasBuiltInClient { return true }
+        return !SettingsStore.shared.googleClientID.trimmingCharacters(in: .whitespaces).isEmpty
             && KeychainStore.shared.get(.googleClientSecret) != nil
     }
 
@@ -106,9 +130,21 @@ actor GoogleOAuth {
         await listener.cancel()
 
         try await exchangeCode(code, redirectURI: redirectURI, verifier: verifier, secret: secret)
+        await storePrimaryEmail()
 #else
         throw GoogleOAuthError.unsupportedPlatform
 #endif
+    }
+
+    /// The primary calendar's id is the account's email — use it to auto-fill
+    /// "self" so we can exclude the user from attendee name suggestions without
+    /// asking them to type it.
+    private func storePrimaryEmail() async {
+        guard let token = try? await accessToken() else { return }
+        let url = URL(string: "https://www.googleapis.com/calendar/v3/calendars/primary")!
+        guard let json = try? await HTTPClient().getJSON(url, headers: ["Authorization": "Bearer \(token)"]),
+              let email = json["id"]?.stringValue, !email.isEmpty else { return }
+        await MainActor.run { SettingsStore.shared.calendarSelfEmail = email }
     }
 
     func disconnect() {
