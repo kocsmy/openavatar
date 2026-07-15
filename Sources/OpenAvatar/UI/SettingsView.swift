@@ -16,6 +16,8 @@ struct SettingsView: View {
                 .tabItem { Label("Trust", systemImage: "checkmark.shield") }
             MemorySettingsTab()
                 .tabItem { Label("Memory", systemImage: "brain.head.profile") }
+            TranscriptsSettingsTab()
+                .tabItem { Label("Transcripts", systemImage: "text.quote") }
             MetricsDashboardTab()
                 .tabItem { Label("Metrics", systemImage: "chart.bar") }
             DataSettingsTab()
