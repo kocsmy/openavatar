@@ -17,10 +17,19 @@ struct MenuBarView: View {
 
     @Environment(\.openSettings) private var openSettings
 
-    /// Starts at the cap and shrinks to the measured content height, so the
-    /// popover never overflows and there's no first-frame flash.
-    @State private var actionsHeight: CGFloat = 440
-    private let maxContentHeight: CGFloat = 440
+    /// Does the actions content need to scroll? Decided from item counts (a pure,
+    /// unit-tested estimate) rather than live measurement — the measured-height
+    /// ScrollView regressed and left a huge blank area under short content.
+    private var actionsMetrics: PopoverLayout.Metrics {
+        PopoverLayout.Metrics(
+            hasCallSuggestion: app.suggestedCallApp != nil && !app.isListening,
+            hasError: app.lastError != nil,
+            suggestions: app.proactiveSuggestions.count,
+            approvals: app.pendingApprovals.count,
+            detected: app.detectedDecisions.count,
+            executed: app.executedActions.count,
+            isEmpty: isEmptyState)
+    }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
@@ -43,17 +52,13 @@ struct MenuBarView: View {
                 LiveTranscriptView()
                     .padding(.horizontal, 14)
                     .padding(.bottom, 14)
+            } else if actionsMetrics.needsScroll {
+                // Tall content → cap and scroll internally.
+                ScrollView { actionsContent.padding(14) }
+                    .frame(height: PopoverLayout.maxContentHeight)
             } else {
-                // Measured scroll: as tall as the content, but never past the cap.
-                ScrollView {
-                    actionsContent
-                        .padding(14)
-                        .background(GeometryReader { geo in
-                            Color.clear.preference(key: PopoverHeightKey.self, value: geo.size.height)
-                        })
-                }
-                .frame(height: min(actionsHeight, maxContentHeight))
-                .onPreferenceChange(PopoverHeightKey.self) { actionsHeight = $0 }
+                // Short content → size to it naturally (no blank space).
+                actionsContent.padding(14)
             }
 
             Divider()
@@ -329,12 +334,35 @@ struct MenuBarView: View {
     }
 }
 
-/// Reports the natural height of the actions content so the popover can size to
-/// it up to a cap (and scroll beyond), rather than overflowing the screen.
-private struct PopoverHeightKey: PreferenceKey {
-    static var defaultValue: CGFloat = 0
-    static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) {
-        value = max(value, nextValue())
+/// Deterministic estimate of the actions-tab content height, so the popover can
+/// decide whether to scroll — without live geometry measurement (which regressed
+/// and left a large blank area under short content). Pure and unit-tested.
+enum PopoverLayout {
+    static let maxContentHeight: CGFloat = 440
+
+    struct Metrics: Equatable {
+        var hasCallSuggestion: Bool
+        var hasError: Bool
+        var suggestions: Int
+        var approvals: Int
+        var detected: Int
+        var executed: Int
+        var isEmpty: Bool
+
+        /// Rough height in points; only needs to be right about the scroll cutoff.
+        var estimatedHeight: CGFloat {
+            if isEmpty { return 150 }
+            var h: CGFloat = 20                                   // section spacing overhead
+            if hasCallSuggestion { h += 64 }
+            if hasError { h += 156 }
+            if suggestions > 0 { h += 24 + CGFloat(min(suggestions, 3)) * 72 }
+            h += CGFloat(approvals) * 244                        // approval cards are tall
+            if detected > 0 { h += 24 + CGFloat(min(detected, 3)) * 74 }
+            if executed > 0 { h += 24 + CGFloat(min(executed, 5)) * 44 }
+            return h
+        }
+
+        var needsScroll: Bool { estimatedHeight > PopoverLayout.maxContentHeight }
     }
 }
 

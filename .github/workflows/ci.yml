@@ -97,6 +97,10 @@ jobs:
           # Stamp the release version (Sparkle compares CFBundleVersion) and sign.
           VERSION="${TAG#v}" BUILD_NUMBER="${GITHUB_RUN_NUMBER}" ./scripts/make-app.sh release
 
+          # Startup smoke test: fail the release if the app crashes on launch.
+          chmod +x scripts/smoke-test.sh
+          ./scripts/smoke-test.sh build/OpenAvatar.app
+
           if [ "${NOTARIZE}" = "1" ]; then
             ./scripts/notarize.sh build/OpenAvatar.app   # staples the .app
           fi
