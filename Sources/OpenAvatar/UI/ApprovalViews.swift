@@ -175,7 +175,7 @@ struct PostCallReviewView: View {
     @EnvironmentObject var settings: SettingsStore
 
     private var isEmpty: Bool {
-        app.detectedDecisions.isEmpty && app.pendingApprovals.isEmpty
+        app.detectedDecisions.isEmpty && app.pendingApprovals.isEmpty && app.pendingFollowUps.isEmpty
     }
 
     var body: some View {
@@ -188,6 +188,9 @@ struct PostCallReviewView: View {
                 header
                 ScrollView {
                     VStack(alignment: .leading, spacing: 10) {
+                        if !app.pendingFollowUps.isEmpty {
+                            followUpsSection
+                        }
                         ForEach(app.pendingApprovals) { approval in
                             ApprovalCard(approval: approval)
                         }
@@ -201,6 +204,40 @@ struct PostCallReviewView: View {
         }
         .padding(20)
         .frame(width: 640, height: 600)
+    }
+
+    private var followUpsSection: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Label("Follow-ups — remind me later", systemImage: "bell.badge")
+                .font(.subheadline.weight(.semibold))
+                .foregroundStyle(Color.brand)
+            ForEach(app.pendingFollowUps) { followUp in
+                HStack(alignment: .top, spacing: 10) {
+                    Image(systemName: "clock.arrow.circlepath")
+                        .foregroundStyle(Color.brand)
+                        .frame(width: 20)
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text(followUp.title).font(.callout)
+                        Text(FollowUpFormatter.due(followUp.dueAt))
+                            .font(.caption2.weight(.medium)).foregroundStyle(.secondary)
+                        if let quote = followUp.quote, !quote.isEmpty {
+                            Text("“\(quote)”").font(.caption2).foregroundStyle(.tertiary).lineLimit(1)
+                        }
+                    }
+                    Spacer(minLength: 8)
+                    Button("Remind me") { app.confirmFollowUp(followUp) }
+                        .buttonStyle(.borderedProminent)
+                        .controlSize(.small)
+                    Button {
+                        app.dismissFollowUp(followUp)
+                    } label: { Image(systemName: "xmark.circle") }
+                        .buttonStyle(.borderless)
+                        .help("Don't remind me")
+                }
+                .padding(8)
+                .background(Color.brand.opacity(0.07), in: RoundedRectangle(cornerRadius: 8))
+            }
+        }
     }
 
     private var header: some View {

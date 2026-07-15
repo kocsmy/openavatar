@@ -20,6 +20,8 @@ struct SettingsView: View {
                 .tabItem { Label("Memory", systemImage: "brain.head.profile") }
             TranscriptsSettingsTab()
                 .tabItem { Label("Transcripts", systemImage: "text.quote") }
+            FollowUpsSettingsTab()
+                .tabItem { Label("Follow-ups", systemImage: "bell.badge") }
             MetricsDashboardTab()
                 .tabItem { Label("Metrics", systemImage: "chart.bar") }
             DataSettingsTab()

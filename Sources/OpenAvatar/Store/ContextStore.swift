@@ -138,7 +138,78 @@ final class ContextStore: @unchecked Sendable {
                 CREATE INDEX idx_segments_speaker ON transcript_segments(speaker_id);
                 """)
         }
+        // v5 — Follow-ups: time-referenced items to revisit, with reminders.
+        migrator.registerMigration("v5-followups") { db in
+            try db.execute(sql: """
+                CREATE TABLE followups (
+                    id TEXT PRIMARY KEY,
+                    call_id TEXT,
+                    title TEXT NOT NULL,
+                    quote TEXT,
+                    due_at REAL NOT NULL,
+                    created_at REAL NOT NULL,
+                    status TEXT NOT NULL DEFAULT 'suggested'
+                );
+                CREATE INDEX idx_followups_status ON followups(status, due_at);
+                """)
+        }
         try migrator.migrate(dbQueue)
+    }
+
+    // MARK: - Follow-ups
+
+    private static func followUp(from row: Row) -> FollowUp? {
+        guard let id = UUID(uuidString: row["id"] as String? ?? "") else { return nil }
+        return FollowUp(
+            id: id,
+            callID: (row["call_id"] as String?).flatMap { UUID(uuidString: $0) },
+            title: row["title"] as String? ?? "",
+            quote: row["quote"] as String?,
+            dueAt: Date(timeIntervalSince1970: row["due_at"] as Double? ?? 0),
+            createdAt: Date(timeIntervalSince1970: row["created_at"] as Double? ?? 0),
+            status: FollowUpStatus(rawValue: row["status"] as String? ?? "") ?? .suggested)
+    }
+
+    func insertFollowUp(_ f: FollowUp) throws {
+        try dbQueue.write { db in
+            try db.execute(sql: """
+                INSERT INTO followups (id, call_id, title, quote, due_at, created_at, status)
+                VALUES (?, ?, ?, ?, ?, ?, ?)
+                """, arguments: [f.id.uuidString, f.callID?.uuidString, f.title, f.quote,
+                                 f.dueAt.timeIntervalSince1970, f.createdAt.timeIntervalSince1970,
+                                 f.status.rawValue])
+        }
+    }
+
+    /// Follow-ups with the given statuses, soonest-due first.
+    func followUps(statuses: [FollowUpStatus]) throws -> [FollowUp] {
+        try dbQueue.read { db in
+            let placeholders = statuses.map { _ in "?" }.joined(separator: ", ")
+            let rows = try Row.fetchAll(db, sql: """
+                SELECT * FROM followups WHERE status IN (\(placeholders)) ORDER BY due_at
+                """, arguments: StatementArguments(statuses.map { $0.rawValue }))
+            return rows.compactMap(Self.followUp(from:))
+        }
+    }
+
+    func updateFollowUpStatus(id: UUID, status: FollowUpStatus) throws {
+        try dbQueue.write { db in
+            try db.execute(sql: "UPDATE followups SET status = ? WHERE id = ?",
+                           arguments: [status.rawValue, id.uuidString])
+        }
+    }
+
+    func updateFollowUpDue(id: UUID, dueAt: Date) throws {
+        try dbQueue.write { db in
+            try db.execute(sql: "UPDATE followups SET due_at = ? WHERE id = ?",
+                           arguments: [dueAt.timeIntervalSince1970, id.uuidString])
+        }
+    }
+
+    func deleteFollowUp(id: UUID) throws {
+        try dbQueue.write { db in
+            try db.execute(sql: "DELETE FROM followups WHERE id = ?", arguments: [id.uuidString])
+        }
     }
 
     // MARK: - Calls
@@ -561,7 +632,7 @@ final class ContextStore: @unchecked Sendable {
             var export: [String: JSONValue] = [:]
             let tables = ["calls", "transcript_segments", "decisions", "actions",
                           "entities", "metrics_daily", "llm_usage",
-                          "call_digests", "memory_facts", "speaker_profiles"]
+                          "call_digests", "memory_facts", "speaker_profiles", "followups"]
             for table in tables {
                 let rows = try Row.fetchAll(db, sql: "SELECT * FROM \(table)")
                 export[table] = .array(rows.map { row in
@@ -586,7 +657,7 @@ final class ContextStore: @unchecked Sendable {
         try dbQueue.write { db in
             for table in ["calls", "transcript_segments", "decisions", "actions",
                           "entities", "metrics_daily", "llm_usage",
-                          "call_digests", "memory_facts", "speaker_profiles"] {
+                          "call_digests", "memory_facts", "speaker_profiles", "followups"] {
                 try db.execute(sql: "DELETE FROM \(table)")
             }
         }
