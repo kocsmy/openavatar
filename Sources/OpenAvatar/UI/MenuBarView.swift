@@ -1,4 +1,7 @@
 import SwiftUI
+#if canImport(AppKit)
+import AppKit
+#endif
 
 /// Menu-bar popover (spec §4.8): recording toggle, live "Detected this call"
 /// list, pending approvals, executed actions with Undo.
@@ -12,185 +15,279 @@ struct MenuBarView: View {
     }
     @State private var tab: PopoverTab = .actions
 
+    @Environment(\.openSettings) private var openSettings
+
     var body: some View {
-        VStack(alignment: .leading, spacing: 10) {
+        VStack(alignment: .leading, spacing: 0) {
             header
-            Picker("", selection: $tab) {
-                ForEach(PopoverTab.allCases, id: \.self) { Text($0.rawValue).tag($0) }
-            }
-            .pickerStyle(.segmented)
-            .labelsHidden()
+                .padding(.horizontal, 14)
+                .padding(.top, 12)
+                .padding(.bottom, 10)
             Divider()
 
-            if tab == .transcript {
-                LiveTranscriptView()
-                Divider()
-                footer
-            } else {
-                actionsBody
+            VStack(alignment: .leading, spacing: 14) {
+                Picker("", selection: $tab) {
+                    ForEach(PopoverTab.allCases, id: \.self) { Text($0.rawValue).tag($0) }
+                }
+                .pickerStyle(.segmented)
+                .labelsHidden()
+
+                if tab == .transcript {
+                    LiveTranscriptView()
+                } else {
+                    actionsContent
+                }
             }
+            .padding(14)
+
+            Divider()
+            footer
+                .padding(.horizontal, 14)
+                .padding(.vertical, 10)
         }
-        .padding(12)
         .frame(width: 420)
     }
 
-    @ViewBuilder private var actionsBody: some View {
-        VStack(alignment: .leading, spacing: 10) {
+    // MARK: Actions tab
+
+    @ViewBuilder private var actionsContent: some View {
+        VStack(alignment: .leading, spacing: 14) {
+            callSuggestionBanner
 
             if let error = app.lastError {
-                VStack(alignment: .leading, spacing: 4) {
-                    HStack {
-                        Label("Something went wrong", systemImage: "exclamationmark.triangle.fill")
-                            .font(.caption.weight(.semibold))
-                            .foregroundStyle(.orange)
-                        Spacer()
-                        Button {
-#if canImport(AppKit)
-                            NSPasteboard.general.clearContents()
-                            NSPasteboard.general.setString(error, forType: .string)
-#endif
-                        } label: { Image(systemName: "doc.on.doc") }
-                            .buttonStyle(.borderless)
-                            .help("Copy full error")
-                        Button {
-                            app.clearErrors()
-                        } label: { Image(systemName: "xmark.circle") }
-                            .buttonStyle(.borderless)
-                            .help("Dismiss")
-                    }
-                    // Full error, selectable and scrollable — never truncated
-                    // to an unreadable single line.
-                    ScrollView {
-                        Text(error)
-                            .font(.system(.caption2, design: .monospaced))
-                            .foregroundStyle(.orange)
-                            .textSelection(.enabled)
-                            .frame(maxWidth: .infinity, alignment: .leading)
-                    }
-                    .frame(maxHeight: 130)
-                    .padding(6)
-                    .background(.orange.opacity(0.08), in: RoundedRectangle(cornerRadius: 6))
-                    if app.errorLog.count > 1 {
-                        Text("\(app.errorLog.count) errors this session — full log in Settings → Data")
-                            .font(.caption2)
-                            .foregroundStyle(.tertiary)
-                    }
-                }
+                errorCard(error)
             }
 
             if !app.proactiveSuggestions.isEmpty {
-                sectionTitle("Suggestions")
-                ForEach(app.proactiveSuggestions) { suggestion in
-                    HStack(alignment: .top, spacing: 8) {
-                        Image(systemName: "lightbulb")
-                            .foregroundStyle(.yellow)
-                        VStack(alignment: .leading, spacing: 2) {
-                            Text(suggestion.title).font(.callout)
-                            Text(suggestion.rationale).font(.caption2)
-                                .foregroundStyle(.tertiary).lineLimit(2)
-                        }
-                        Spacer()
-                        Button("Prepare") { app.accept(suggestion) }
-                            .controlSize(.small)
-                        Button {
-                            app.dismissSuggestion(suggestion)
-                        } label: { Image(systemName: "xmark.circle") }
-                            .buttonStyle(.borderless)
+                section("Suggestions") {
+                    ForEach(app.proactiveSuggestions) { suggestion in
+                        suggestionRow(suggestion)
                     }
                 }
             }
 
             if !app.pendingApprovals.isEmpty {
-                sectionTitle("Waiting for your approval")
-                ForEach(app.pendingApprovals) { approval in
-                    ApprovalCard(approval: approval)
+                section("Waiting for your approval") {
+                    ForEach(app.pendingApprovals) { approval in
+                        ApprovalCard(approval: approval)
+                    }
                 }
             }
 
             if !app.detectedDecisions.isEmpty {
-                sectionTitle("Detected this call")
-                ScrollView {
-                    VStack(alignment: .leading, spacing: 6) {
-                        ForEach(app.detectedDecisions) { decision in
-                            DecisionRow(decision: decision)
+                section("Detected this call") {
+                    ScrollView {
+                        VStack(alignment: .leading, spacing: 8) {
+                            ForEach(app.detectedDecisions) { decision in
+                                DecisionRow(decision: decision)
+                            }
                         }
                     }
+                    .frame(maxHeight: 220)
                 }
-                .frame(maxHeight: 220)
             }
 
             if !app.executedActions.isEmpty {
-                sectionTitle("Executed")
-                ForEach(app.executedActions.prefix(5)) { action in
-                    ExecutedActionRow(action: action)
+                section("Executed") {
+                    ForEach(app.executedActions.prefix(5)) { action in
+                        ExecutedActionRow(action: action)
+                    }
                 }
             }
 
-            if app.detectedDecisions.isEmpty && app.pendingApprovals.isEmpty
-                && app.executedActions.isEmpty && app.lastError == nil {
-                Text(app.isListening
-                     ? "Listening… decisions will appear here."
-                     : "Not listening. Nothing is recorded until you start.")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-            }
-
-            Divider()
-            footer
+            if isEmptyState { emptyState }
         }
     }
 
+    private var isEmptyState: Bool {
+        app.detectedDecisions.isEmpty && app.pendingApprovals.isEmpty
+            && app.executedActions.isEmpty && app.lastError == nil
+            && app.proactiveSuggestions.isEmpty
+    }
+
+    @ViewBuilder private var callSuggestionBanner: some View {
+        if let suggestion = app.suggestedCallApp, !app.isListening {
+            HStack(spacing: 10) {
+                Image(systemName: "phone.badge.waveform")
+                    .foregroundStyle(Color.accentColor)
+                    .font(.title3)
+                VStack(alignment: .leading, spacing: 1) {
+                    Text("\(suggestion) looks active").font(.caption.weight(.semibold))
+                    Text("Start listening for this call?")
+                        .font(.caption2).foregroundStyle(.secondary)
+                }
+                Spacer()
+                Button("Start") { app.startListening() }
+                    .controlSize(.small)
+                    .buttonStyle(.borderedProminent)
+            }
+            .padding(10)
+            .background(Color.accentColor.opacity(0.10),
+                        in: RoundedRectangle(cornerRadius: 8, style: .continuous))
+        }
+    }
+
+    private var emptyState: some View {
+        VStack(spacing: 8) {
+            Image(systemName: app.isListening ? "waveform" : "moon.zzz")
+                .font(.system(size: 26))
+                .foregroundStyle(.tertiary)
+            Text(app.isListening
+                 ? "Listening — decisions will appear here as they come up."
+                 : "Not listening. Nothing is recorded until you start.")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .multilineTextAlignment(.center)
+        }
+        .frame(maxWidth: .infinity)
+        .padding(.vertical, 20)
+    }
+
+    private func errorCard(_ error: String) -> some View {
+        VStack(alignment: .leading, spacing: 4) {
+            HStack {
+                Label("Something went wrong", systemImage: "exclamationmark.triangle.fill")
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(.orange)
+                Spacer()
+                Button {
+#if canImport(AppKit)
+                    NSPasteboard.general.clearContents()
+                    NSPasteboard.general.setString(error, forType: .string)
+#endif
+                } label: { Image(systemName: "doc.on.doc") }
+                    .buttonStyle(.borderless)
+                    .help("Copy full error")
+                Button { app.clearErrors() } label: { Image(systemName: "xmark.circle") }
+                    .buttonStyle(.borderless)
+                    .help("Dismiss")
+            }
+            // Full error, selectable and scrollable — never truncated.
+            ScrollView {
+                Text(error)
+                    .font(.system(.caption2, design: .monospaced))
+                    .foregroundStyle(.orange)
+                    .textSelection(.enabled)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+            }
+            .frame(maxHeight: 130)
+            .padding(6)
+            .background(.orange.opacity(0.08), in: RoundedRectangle(cornerRadius: 6))
+            if app.errorLog.count > 1 {
+                Text("\(app.errorLog.count) errors this session — full log in Settings → Data")
+                    .font(.caption2)
+                    .foregroundStyle(.tertiary)
+            }
+        }
+    }
+
+    private func suggestionRow(_ suggestion: ProactiveSuggestion) -> some View {
+        HStack(alignment: .top, spacing: 8) {
+            Image(systemName: "lightbulb").foregroundStyle(.yellow)
+            VStack(alignment: .leading, spacing: 2) {
+                Text(suggestion.title).font(.callout)
+                Text(suggestion.rationale).font(.caption2)
+                    .foregroundStyle(.tertiary).lineLimit(2)
+            }
+            Spacer()
+            Button("Prepare") { app.accept(suggestion) }.controlSize(.small)
+            Button { app.dismissSuggestion(suggestion) } label: {
+                Image(systemName: "xmark.circle")
+            }
+            .buttonStyle(.borderless)
+        }
+    }
+
+    // MARK: Header / footer
+
     private var header: some View {
-        HStack {
+        HStack(spacing: 11) {
+            statusChip
             VStack(alignment: .leading, spacing: 2) {
                 Text(settings.assistantName).font(.headline)
-                HStack(spacing: 4) {
-                    Circle()
-                        .fill(app.isListening ? Color.red : Color.gray.opacity(0.5))
-                        .frame(width: 8, height: 8)
-                    Text(app.isListening
-                         ? (app.systemAudioActive ? "Recording mic + system audio" : "Recording mic")
-                         : "Idle")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                    if app.isPlanning {
-                        ProgressView().controlSize(.mini)
+                HStack(spacing: 5) {
+                    Text(statusText).font(.caption).foregroundStyle(.secondary)
+                    if app.isPlanning { ProgressView().controlSize(.mini) }
+                    if app.isConsolidating {
+                        Text("· saving").font(.caption2).foregroundStyle(.tertiary)
                     }
                 }
             }
             Spacer()
-            Toggle(isOn: Binding(get: { app.isListening },
-                                 set: { _ in app.toggleListening() })) {
-                Text(app.isListening ? "Stop" : "Listen")
+            Button { app.toggleListening() } label: {
+                Label(app.isListening ? "Stop" : "Listen",
+                      systemImage: app.isListening ? "stop.fill" : "waveform")
+                    .frame(minWidth: 52)
             }
-            .toggleStyle(.button)
+            .buttonStyle(.borderedProminent)
+            .tint(app.isListening ? .red : .accentColor)
+            .controlSize(.large)
             .keyboardShortcut("l", modifiers: [.command, .shift])
         }
     }
 
-    private var footer: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            if let suggestion = app.suggestedCallApp, !app.isListening {
-                Label("\(suggestion) looks like it's running — start listening?",
-                      systemImage: "phone.badge.waveform")
-                    .font(.caption)
-            }
-            HStack {
-                Picker("Mode", selection: $settings.mode) {
-                    ForEach(AssistantMode.allCases, id: \.self) { mode in
-                        Text(mode.displayName).tag(mode)
-                    }
-                }
-                .pickerStyle(.segmented)
-                .frame(width: 160)
-                .help("Passive: review after the call. Active: executes immediately when you address \(settings.assistantName) by name.")
+    private var statusChip: some View {
+        ZStack {
+            RoundedRectangle(cornerRadius: 10, style: .continuous)
+                .fill(app.isListening ? Color.red.opacity(0.14) : Color.secondary.opacity(0.12))
+                .frame(width: 38, height: 38)
+            Image(systemName: app.isListening ? "waveform" : "waveform.slash")
+                .font(.system(size: 16, weight: .semibold))
+                .foregroundStyle(app.isListening ? Color.red : Color.secondary)
+        }
+    }
 
-                Spacer()
-                SettingsLink { Image(systemName: "gearshape") }
-                Button {
-                    NSApp.terminate(nil)
-                } label: { Image(systemName: "power") }
+    private var statusText: String {
+        guard app.isListening else { return "Idle" }
+        return app.systemAudioActive ? "Listening · mic + call audio" : "Listening · mic"
+    }
+
+    private var footer: some View {
+        HStack(spacing: 10) {
+            Text("Mode").font(.caption).foregroundStyle(.secondary)
+            Picker("Mode", selection: $settings.mode) {
+                ForEach(AssistantMode.allCases, id: \.self) { mode in
+                    Text(mode.displayName).tag(mode)
+                }
             }
+            .pickerStyle(.segmented)
+            .labelsHidden()
+            .frame(width: 148)
+            .help("Passive: review after the call. Active: executes immediately when you address \(settings.assistantName) by name.")
+
+            Spacer()
+            Button { openSettingsAndFocus() } label: { Image(systemName: "gearshape") }
+                .buttonStyle(.borderless)
+                .help("Settings")
+            Button { NSApp.terminate(nil) } label: { Image(systemName: "power") }
+                .buttonStyle(.borderless)
+                .help("Quit \(settings.assistantName)")
+        }
+    }
+
+    /// Opens Settings and forces it to the front. As a menu-bar (accessory) app
+    /// we aren't "active", so an already-open Settings window would otherwise
+    /// stay buried behind other apps' windows — activate first, then raise it.
+    private func openSettingsAndFocus() {
+        NSApp.activate(ignoringOtherApps: true)
+        openSettings()
+        DispatchQueue.main.async {
+            NSApp.activate(ignoringOtherApps: true)
+            let settingsWindow = NSApp.windows.first {
+                $0.identifier?.rawValue == "com_apple_SwiftUI_Settings_window"
+                    || $0.title == "OpenAvatar Settings"
+            }
+            settingsWindow?.makeKeyAndOrderFront(nil)
+            settingsWindow?.orderFrontRegardless()
+        }
+    }
+
+    @ViewBuilder private func section<Content: View>(
+        _ title: String, @ViewBuilder content: () -> Content
+    ) -> some View {
+        VStack(alignment: .leading, spacing: 8) {
+            sectionTitle(title)
+            content()
         }
     }
 
@@ -198,6 +295,7 @@ struct MenuBarView: View {
         Text(text.uppercased())
             .font(.caption2.weight(.semibold))
             .foregroundStyle(.secondary)
+            .kerning(0.4)
     }
 }
 
