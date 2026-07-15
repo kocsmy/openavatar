@@ -174,13 +174,16 @@ struct PostCallReviewView: View {
     @EnvironmentObject var app: AppState
     @EnvironmentObject var settings: SettingsStore
 
+    @State private var showHandled = false
+    @State private var handled: [Decision] = []
+
     private var isEmpty: Bool {
         app.detectedDecisions.isEmpty && app.pendingApprovals.isEmpty && app.pendingFollowUps.isEmpty
     }
 
     var body: some View {
         VStack(spacing: 16) {
-            if isEmpty {
+            if isEmpty && !showHandled {
                 Spacer(minLength: 0)
                 successState
                 Spacer(minLength: 0)
@@ -197,6 +200,9 @@ struct PostCallReviewView: View {
                         ForEach(app.detectedDecisions) { decision in
                             reviewRow(decision)
                         }
+                        if showHandled {
+                            handledSection
+                        }
                     }
                 }
             }
@@ -204,6 +210,62 @@ struct PostCallReviewView: View {
         }
         .padding(20)
         .frame(width: 640, height: 600)
+        .onAppear { handled = app.handledDecisions() }
+    }
+
+    // MARK: Handled history ("what happened")
+
+    private var handledSection: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text("HANDLED ON THIS CALL")
+                .font(.caption2.weight(.semibold))
+                .foregroundStyle(.secondary)
+                .kerning(0.4)
+            if handled.isEmpty {
+                Text("Nothing has been handled on this call yet.")
+                    .font(.caption).foregroundStyle(.tertiary)
+            }
+            ForEach(handled) { decision in
+                handledRow(decision)
+            }
+        }
+    }
+
+    private func handledRow(_ decision: Decision) -> some View {
+        let style = Self.statusStyle(decision.status)
+        return HStack(alignment: .top, spacing: 10) {
+            Image(systemName: style.icon)
+                .foregroundStyle(style.color)
+                .frame(width: 20)
+            VStack(alignment: .leading, spacing: 2) {
+                Text(decision.summary).font(.callout).foregroundStyle(.secondary)
+                Text("“\(decision.quote)”")
+                    .font(.caption2).foregroundStyle(.tertiary).lineLimit(1)
+                HStack(spacing: 4) {
+                    Text(style.label)
+                        .font(.caption2.weight(.semibold))
+                        .foregroundStyle(style.color)
+                    if decision.status == .dismissed, let reason = decision.dismissReason {
+                        Text("· \(reason.displayName)")
+                            .font(.caption2).foregroundStyle(.tertiary)
+                    }
+                }
+            }
+            Spacer(minLength: 8)
+        }
+        .padding(8)
+        .background(.background.secondary.opacity(0.6), in: RoundedRectangle(cornerRadius: 8))
+    }
+
+    static func statusStyle(_ status: DecisionStatus) -> (label: String, icon: String, color: Color) {
+        switch status {
+        case .approved: return ("Approved", "checkmark.circle.fill", .green)
+        case .edited: return ("Edited & approved", "pencil.circle.fill", .orange)
+        case .executed: return ("Executed", "bolt.circle.fill", .green)
+        case .dismissed: return ("Dismissed", "xmark.circle.fill", .secondary)
+        case .reverted: return ("Undone", "arrow.uturn.backward.circle.fill", .orange)
+        case .detected: return ("Pending", "circle", .secondary)
+        }
     }
 
     private var followUpsSection: some View {
@@ -276,6 +338,15 @@ struct PostCallReviewView: View {
 
     private var footer: some View {
         HStack {
+            Button {
+                handled = app.handledDecisions()   // refresh, incl. just-now actions
+                showHandled.toggle()
+            } label: {
+                Label(showHandled ? "Hide handled" : "Show handled (\(handled.count))",
+                      systemImage: showHandled ? "eye.slash" : "clock.arrow.circlepath")
+            }
+            .controlSize(.small)
+            .help("See what was already approved, dismissed, or executed on this call")
             if app.isPlanning {
                 ProgressView().controlSize(.small)
                 Text("Planning…").font(.caption).foregroundStyle(.secondary)

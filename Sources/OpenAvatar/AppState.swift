@@ -230,6 +230,14 @@ final class AppState: ObservableObject {
         !(((try? store.decisions(callID: callID)) ?? []).awaitingReview.isEmpty)
     }
 
+    /// Already-handled decisions of the call currently shown in the review —
+    /// the audit trail behind the "Show handled" toggle.
+    func handledDecisions() -> [Decision] {
+        guard let callID = currentCallID else { return [] }
+        return ((try? store.decisions(callID: callID)) ?? [])
+            .filter { $0.status != .detected }
+    }
+
     // MARK: - Follow-ups (confirm in review → scheduled reminder)
 
     /// Confirm a suggested follow-up: mark it scheduled and set a local reminder
