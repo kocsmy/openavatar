@@ -416,6 +416,8 @@ struct DecisionRow: View {
             Spacer(minLength: 6)
             Button("Prepare") { app.prepare(decision) }
                 .controlSize(.small)
+            // .menuStyle(.button) + borderless: the borderlessButton style with a
+            // hidden indicator stopped opening the reason dropdown at all.
             Menu {
                 ForEach(DismissReason.allCases, id: \.self) { reason in
                     Button(reasonLabel(reason)) { app.dismiss(decision, reason: reason) }
@@ -423,10 +425,11 @@ struct DecisionRow: View {
             } label: {
                 Image(systemName: "xmark.circle")
             }
-            .menuStyle(.borderlessButton)
-            .menuIndicator(.hidden)
+            .menuStyle(.button)
+            .buttonStyle(.borderless)
+            .controlSize(.small)
             .fixedSize()
-            .help("Dismiss")
+            .help("Dismiss with a reason")
         }
         .opacity(belowThreshold ? 0.6 : 1)
     }

@@ -70,6 +70,7 @@ final class AppState: ObservableObject {
     private(set) lazy var proactive = ProactiveEngine(router: router, store: store)
     private(set) lazy var followUpExtractor = FollowUpExtractor(router: router, store: store)
     private(set) lazy var nameGuesser = SpeakerNameGuesser(router: router, store: store)
+    private(set) lazy var sanitizer = ReviewSanitizer(router: router)
 
     private(set) lazy var diarizer = SpeakerDiarizer()
     private lazy var calendar = GoogleCalendarClient(
