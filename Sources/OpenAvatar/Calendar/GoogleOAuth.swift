@@ -22,7 +22,7 @@ enum GoogleOAuthError: LocalizedError {
     var errorDescription: String? {
         switch self {
         case .notConfigured:
-            return "Google Calendar isn't set up. Add your OAuth client ID and secret in Settings → Calendar."
+            return "Google Calendar isn't set up. Connect it in Settings → Integrations."
         case .userCancelled:
             return "Google sign-in was cancelled."
         case .listenerFailed(let m): return "Local sign-in listener failed: \(m)"
