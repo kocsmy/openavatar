@@ -302,6 +302,7 @@ struct CalendarSettingsTab: View {
                             Task {
                                 await GoogleOAuth.shared.disconnect()
                                 connected = false
+                                settings.calendarEnabled = false
                                 status = "Disconnected."
                                 eventPreview = nil
                             }
@@ -355,6 +356,14 @@ struct CalendarSettingsTab: View {
         }
         .formStyle(.grouped)
         .padding()
+        .onAppear {
+            // Reconcile pre-existing installs: earlier versions could leave you
+            // connected with the feature toggle still off (nothing turned it on
+            // when you connected). Being connected implies you want it used.
+            if connected && !settings.calendarEnabled {
+                settings.calendarEnabled = true
+            }
+        }
     }
 
     @ViewBuilder private var oauthCredentialFields: some View {
@@ -398,6 +407,7 @@ struct CalendarSettingsTab: View {
             do {
                 try await GoogleOAuth.shared.connect()
                 connected = true
+                settings.calendarEnabled = true   // connecting implies you want it used
                 status = "Connected. Calendar look-up is ready."
             } catch {
                 status = Redactor.redact(error.localizedDescription)
