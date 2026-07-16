@@ -458,6 +458,53 @@ final class ContextStore: @unchecked Sendable {
         }
     }
 
+    /// Break ONE call's voice out of a profile it was wrongly matched to —
+    /// the inverse of merge. The call's segments move to a brand-new unnamed
+    /// "Speaker N" profile (rename it afterwards); the source profile keeps its
+    /// name, fingerprint and every other call. Use this when a new person got
+    /// labeled with an existing person's name. Returns the new profile's id,
+    /// or nil when the source had no segments on that call.
+    func detachSpeaker(callID: UUID, from source: UUID) throws -> UUID? {
+        try dbQueue.write { db in
+            let segmentCount = try Int.fetchOne(db, sql: """
+                SELECT COUNT(*) FROM transcript_segments WHERE call_id = ? AND speaker_id = ?
+                """, arguments: [callID.uuidString, source.uuidString]) ?? 0
+            guard segmentCount > 0 else { return nil }
+
+            // The new profile inherits the source's centroid — per-utterance
+            // embeddings aren't stored, and this call's voice is what pulled
+            // the centroid anyway. Future utterances re-shape it from here.
+            guard let row = try Row.fetchOne(db, sql: """
+                SELECT embedding, sample_count FROM speaker_profiles WHERE id = ?
+                """, arguments: [source.uuidString]),
+                  let blob = row["embedding"] as Data? else { return nil }
+            let sourceSamples = row["sample_count"] as Int? ?? 1
+
+            let ordinal = (try Int.fetchOne(
+                db, sql: "SELECT MAX(ordinal) FROM speaker_profiles") ?? 0) + 1
+            let newID = UUID()
+            let now = Date().timeIntervalSince1970
+            try db.execute(sql: """
+                INSERT INTO speaker_profiles (id, name, ordinal, embedding, sample_count, created_at, updated_at)
+                VALUES (?, NULL, ?, ?, ?, ?, ?)
+                """, arguments: [newID.uuidString, ordinal, blob,
+                                 max(1, segmentCount), now, now])
+
+            try db.execute(sql: """
+                UPDATE transcript_segments SET speaker_id = ?, speaker = ?
+                WHERE call_id = ? AND speaker_id = ?
+                """, arguments: [newID.uuidString, "Speaker \(ordinal)",
+                                 callID.uuidString, source.uuidString])
+
+            // Give the source back the weight this call contributed so future
+            // centroid updates aren't diluted by utterances that left.
+            try db.execute(sql: """
+                UPDATE speaker_profiles SET sample_count = ?, updated_at = ? WHERE id = ?
+                """, arguments: [max(1, sourceSamples - segmentCount), now, source.uuidString])
+            return newID
+        }
+    }
+
     // MARK: - Decisions
 
     func insert(_ decision: Decision) throws {

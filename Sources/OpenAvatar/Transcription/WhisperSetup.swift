@@ -1,17 +1,67 @@
 import Foundation
 import Combine
 
+/// The whisper.cpp models the app can install. All multilingual (language
+/// auto-detect keeps working). Bigger = noticeably more accurate transcripts
+/// at the cost of download size, RAM, and per-chunk latency — on Apple
+/// Silicon, `small` is the sweet spot and `largeTurbo` is the best quality
+/// that still keeps up with live calls.
+enum WhisperModel: String, CaseIterable, Identifiable, Sendable {
+    case base = "ggml-base.bin"
+    case small = "ggml-small.bin"
+    case medium = "ggml-medium.bin"
+    case largeTurbo = "ggml-large-v3-turbo.bin"
+
+    var id: String { rawValue }
+
+    var shortName: String {
+        switch self {
+        case .base: return "Base"
+        case .small: return "Small"
+        case .medium: return "Medium"
+        case .largeTurbo: return "Large v3 Turbo"
+        }
+    }
+
+    var sizeLabel: String {
+        switch self {
+        case .base: return "~150 MB"
+        case .small: return "~500 MB"
+        case .medium: return "~1.5 GB"
+        case .largeTurbo: return "~1.6 GB"
+        }
+    }
+
+    var displayName: String {
+        switch self {
+        case .base: return "Base — fastest, okay accuracy (\(sizeLabel))"
+        case .small: return "Small — much better accuracy (\(sizeLabel))"
+        case .medium: return "Medium — near-best, slower (\(sizeLabel))"
+        case .largeTurbo: return "Large v3 Turbo — best, needs a fast Mac (\(sizeLabel))"
+        }
+    }
+
+    var url: URL {
+        URL(string: "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/\(rawValue)")!
+    }
+
+    /// Which model a configured model path points at, if recognizable.
+    static func from(path: String) -> WhisperModel? {
+        allCases.first { path.hasSuffix($0.rawValue) }
+    }
+}
+
 /// One-click local-transcription setup: finds (or installs via Homebrew) the
-/// whisper-cli binary and downloads the base.en model. Used from onboarding
-/// and Settings → Transcription so users never hand-edit paths.
+/// whisper-cli binary and downloads the chosen multilingual model. Used from
+/// onboarding and Settings → Transcription so users never hand-edit paths.
 @MainActor
 final class WhisperSetupService: ObservableObject {
     enum Phase: Equatable {
         case idle
         case checking
-        case installingCLI          // brew install whisper-cpp
-        case downloadingModel
-        case done(String)           // human summary
+        case installingCLI                  // brew install whisper-cpp
+        case downloadingModel(WhisperModel)
+        case done(String)                   // human summary
         case failed(String)
     }
 
@@ -23,11 +73,6 @@ final class WhisperSetupService: ObservableObject {
         default: return false
         }
     }
-
-    /// Multilingual base model (NOT the .en variant) so auto-detect works for
-    /// Hungarian and every other language, not just English.
-    static let modelURL = URL(string: "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-base.bin")!
-    static let modelFilename = "ggml-base.bin"
 
     private static let cliCandidates = [
         "/opt/homebrew/bin/whisper-cli",
@@ -67,7 +112,10 @@ final class WhisperSetupService: ObservableObject {
 
     // MARK: Setup
 
-    func run(settings: SettingsStore) async {
+    /// Installs whisper-cli if needed and downloads `model` (skips the download
+    /// when the file is already present), then points settings at it — so this
+    /// doubles as the "switch model quality" action.
+    func run(settings: SettingsStore, model: WhisperModel = .base) async {
         phase = .checking
 
         // 1. whisper-cli binary.
@@ -92,14 +140,14 @@ final class WhisperSetupService: ObservableObject {
         }
         settings.whisperCLIPath = cliPath!
 
-        // 2. Model file (~150 MB, one-time).
-        let modelPath = AppPaths.models.appendingPathComponent(Self.modelFilename).path
+        // 2. Model file (one-time per model).
+        let modelPath = AppPaths.models.appendingPathComponent(model.rawValue).path
         if !Self.modelExists(at: modelPath) {
-            phase = .downloadingModel
+            phase = .downloadingModel(model)
             do {
-                let (tempURL, response) = try await URLSession.shared.download(from: Self.modelURL)
+                let (tempURL, response) = try await URLSession.shared.download(from: model.url)
                 guard (response as? HTTPURLResponse).map({ (200...299).contains($0.statusCode) }) ?? false else {
-                    phase = .failed("Model download failed (HTTP \((response as? HTTPURLResponse)?.statusCode ?? -1)). Retry, or download \(Self.modelFilename) manually from huggingface.co/ggerganov/whisper.cpp.")
+                    phase = .failed("Model download failed (HTTP \((response as? HTTPURLResponse)?.statusCode ?? -1)). Retry, or download \(model.rawValue) manually from huggingface.co/ggerganov/whisper.cpp.")
                     return
                 }
                 let destination = URL(fileURLWithPath: modelPath)
@@ -113,7 +161,7 @@ final class WhisperSetupService: ObservableObject {
         settings.whisperModelPath = modelPath
         settings.transcriptionMode = .local
 
-        phase = .done("Local transcription ready — whisper-cli at \(cliPath!), multilingual base model installed (auto-detects language).")
+        phase = .done("Local transcription ready — whisper-cli at \(cliPath!), multilingual \(model.shortName) model active (auto-detects language).")
     }
 
     // MARK: Shell helpers

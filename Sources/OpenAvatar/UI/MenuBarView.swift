@@ -34,20 +34,24 @@ struct MenuBarView: View {
             .padding(.top, 12)
             .padding(.bottom, 4)
 
-            // A shared minimum height keeps both tabs the same size in their
-            // empty/idle state, so switching tabs doesn't resize the menu-bar
-            // window and leave a gap between the popover and the menu-bar icon.
+            // The content region is one CONSTANT height, for both tabs, in
+            // every state, so the menu-bar window has exactly one size and
+            // never resizes while open. MenuBarExtra windows resize
+            // unreliably when content changes mid-open — suggestions and the
+            // call banner arrive asynchronously and used to overlap the
+            // footer (and, earlier, tab switches left a gap under the icon).
+            // Whatever doesn't fit scrolls inside this region instead.
             Group {
                 if tab == .transcript {
                     LiveTranscriptView().padding(14)
-                } else if popoverContent.needsScroll {
-                    ScrollView { actionsContent.padding(14) }
-                        .frame(height: PopoverLayout.maxContentHeight)
+                } else if popoverContent.isEmpty {
+                    actionsContent.padding(14)   // empty state centers itself
                 } else {
-                    actionsContent.padding(14)
+                    ScrollView { actionsContent.padding(14) }
                 }
             }
-            .frame(minHeight: PopoverLayout.minContentHeight, alignment: .top)
+            .frame(height: PopoverLayout.contentHeight, alignment: .top)
+            .clipped()   // even a mis-sized child can never draw over the footer
 
             Divider()
             footer
@@ -141,7 +145,9 @@ struct MenuBarView: View {
                 .foregroundStyle(.secondary)
                 .multilineTextAlignment(.center)
         }
-        .frame(maxWidth: .infinity)
+        // Greedy on both axes: centers itself in the constant-height content
+        // region (below the call banner when one is showing).
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
         .padding(.vertical, 20)
     }
 
@@ -320,39 +326,15 @@ struct MenuBarView: View {
     }
 }
 
-/// Deterministic estimate of the actions-tab content height, so the popover can
-/// decide whether to scroll — without live geometry measurement (which regressed
-/// and left a large blank area under short content). Pure and unit-tested.
+/// The popover's content region is ONE constant height, for both tabs, in every
+/// state — so the menu-bar window never has a reason to resize after it first
+/// opens. Every popover layout bug so far (footer overlapping content, gaps
+/// under the menu-bar icon on tab switch, blank space under short content) came
+/// from dynamic sizing meeting MenuBarExtra's unreliable mid-open resizing.
+/// A height estimate that merely *predicted* scrolling regressed twice; a
+/// constant cannot be wrong.
 enum PopoverLayout {
-    static let maxContentHeight: CGFloat = 440
-    /// Shared floor for both tabs' content so switching tabs in the idle state
-    /// doesn't resize the menu-bar window (which leaves a gap under the icon).
-    static let minContentHeight: CGFloat = 150
-
-    struct Metrics: Equatable {
-        var hasCallSuggestion: Bool
-        var hasError: Bool
-        var suggestions: Int
-        var approvals: Int
-        var detected: Int
-        var executed: Int
-        var isEmpty: Bool
-
-        /// Rough height in points; only needs to be right about the scroll cutoff.
-        var estimatedHeight: CGFloat {
-            if isEmpty { return 150 }
-            var h: CGFloat = 20                                   // section spacing overhead
-            if hasCallSuggestion { h += 64 }
-            if hasError { h += 156 }
-            if suggestions > 0 { h += 24 + CGFloat(min(suggestions, 3)) * 72 }
-            h += CGFloat(approvals) * 244                        // approval cards are tall
-            if detected > 0 { h += 24 + CGFloat(min(detected, 3)) * 74 }
-            if executed > 0 { h += 24 + CGFloat(min(executed, 5)) * 44 }
-            return h
-        }
-
-        var needsScroll: Bool { estimatedHeight > PopoverLayout.maxContentHeight }
-    }
+    static let contentHeight: CGFloat = 440
 }
 
 /// The ordered sections the Actions tab renders, in presentation order.
@@ -360,13 +342,14 @@ enum PopoverSection: String, Equatable {
     case callSuggestion, error, suggestions, approvals, detected, executed, empty
 }
 
-/// Pure view-model for the Actions tab: which sections show, whether the empty
-/// state applies, and whether the content must scroll. The view renders straight
-/// from this, so `PopoverContentTests` snapshots exactly what the user sees.
+/// Pure view-model for the Actions tab: which sections show and whether the
+/// empty state applies. The view renders straight from this, so
+/// `PopoverContentTests` snapshots exactly what the user sees. (Non-empty
+/// content always lives in a ScrollView inside the constant-height region,
+/// so "does it scroll" is no longer a decision anything can get wrong.)
 struct PopoverContent: Equatable {
     let sections: [PopoverSection]
     let isEmpty: Bool
-    let needsScroll: Bool
 
     init(hasCallSuggestion: Bool, hasError: Bool,
          suggestions: Int, approvals: Int, detected: Int, executed: Int) {
@@ -382,10 +365,6 @@ struct PopoverContent: Equatable {
         if empty { s.append(.empty) }
         self.sections = s
         self.isEmpty = empty
-        self.needsScroll = PopoverLayout.Metrics(
-            hasCallSuggestion: hasCallSuggestion, hasError: hasError,
-            suggestions: suggestions, approvals: approvals,
-            detected: detected, executed: executed, isEmpty: empty).needsScroll
     }
 }
 
@@ -416,6 +395,8 @@ struct DecisionRow: View {
             Spacer(minLength: 6)
             Button("Prepare") { app.prepare(decision) }
                 .controlSize(.small)
+            // .menuStyle(.button) + borderless: the borderlessButton style with a
+            // hidden indicator stopped opening the reason dropdown at all.
             Menu {
                 ForEach(DismissReason.allCases, id: \.self) { reason in
                     Button(reasonLabel(reason)) { app.dismiss(decision, reason: reason) }
@@ -423,10 +404,11 @@ struct DecisionRow: View {
             } label: {
                 Image(systemName: "xmark.circle")
             }
-            .menuStyle(.borderlessButton)
-            .menuIndicator(.hidden)
+            .menuStyle(.button)
+            .buttonStyle(.borderless)
+            .controlSize(.small)
             .fixedSize()
-            .help("Dismiss")
+            .help("Dismiss with a reason")
         }
         .opacity(belowThreshold ? 0.6 : 1)
     }

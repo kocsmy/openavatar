@@ -3,9 +3,11 @@ import XCTest
 
 /// Structure-snapshot tests for the menu-bar popover's Actions tab. The view
 /// renders directly from PopoverContent.sections, so asserting the section list
-/// here locks in exactly what the user sees — the section order, which states
-/// show the empty view, and when scrolling kicks in. These would have caught
-/// both popover regressions (v1.7.3 blank space, the busy-review overflow).
+/// here locks in exactly what the user sees — the section order and which
+/// states show the empty view. Sizing is no longer testable logic by design:
+/// the content region is one constant height (PopoverLayout.contentHeight) in
+/// every state, because every popover layout bug (footer overlap, gap under
+/// the icon, blank space) came from dynamic sizing.
 final class PopoverContentTests: XCTestCase {
 
     private func content(callSuggestion: Bool = false, error: Bool = false,
@@ -22,16 +24,14 @@ final class PopoverContentTests: XCTestCase {
         let c = content()
         XCTAssertEqual(c.sections, [.empty])
         XCTAssertTrue(c.isEmpty)
-        XCTAssertFalse(c.needsScroll, "empty state must never scroll (v1.7.3 regression)")
     }
 
     func testIdleWithCallSuggestionShowsBannerAndEmptyState() {
-        // The exact state from the gap/blank-space screenshots: idle + "Slack
-        // looks active" banner. The empty view must still show below the banner.
+        // The exact state from the overlap screenshot: idle + "Slack looks
+        // active" banner. The empty view must still show below the banner.
         let c = content(callSuggestion: true)
         XCTAssertEqual(c.sections, [.callSuggestion, .empty])
         XCTAssertTrue(c.isEmpty)
-        XCTAssertFalse(c.needsScroll)
     }
 
     // MARK: Populated states
@@ -56,15 +56,11 @@ final class PopoverContentTests: XCTestCase {
         XCTAssertTrue(content(callSuggestion: true).isEmpty)
     }
 
-    // MARK: Scroll behavior
+    // MARK: Constant-size contract
 
-    func testSmallContentDoesNotScroll() {
-        XCTAssertFalse(content(detected: 3).needsScroll)
-        XCTAssertFalse(content(approvals: 1).needsScroll)
-    }
-
-    func testBusyReviewScrolls() {
-        XCTAssertTrue(content(suggestions: 1, approvals: 1, detected: 3).needsScroll)
-        XCTAssertTrue(content(approvals: 2).needsScroll)
+    func testContentRegionHeightIsASaneConstant() {
+        // If this constant ever becomes state-dependent again, stop: dynamic
+        // popover sizing is what caused the overlap/gap/blank-space bugs.
+        XCTAssertEqual(PopoverLayout.contentHeight, 440)
     }
 }

@@ -371,15 +371,18 @@ struct PostCallReviewView: View {
             .opacity(decision.confidence < settings.confidenceThreshold ? 0.55 : 1)
             Spacer(minLength: 8)
             Button("Prepare") { app.prepare(decision) }.controlSize(.small)
+            // .menuStyle(.button): borderlessButton + hidden indicator stopped
+            // opening the reason dropdown (same fix as the popover rows).
             Menu {
                 ForEach(DismissReason.allCases, id: \.self) { reason in
                     Button(reason.displayName) { app.dismiss(decision, reason: reason) }
                 }
             } label: { Image(systemName: "xmark.circle") }
-                .menuStyle(.borderlessButton)
-                .menuIndicator(.hidden)
+                .menuStyle(.button)
+                .buttonStyle(.borderless)
+                .controlSize(.small)
                 .fixedSize()
-                .help("Dismiss")
+                .help("Dismiss with a reason")
         }
         .padding(8)
         .background(.background.secondary, in: RoundedRectangle(cornerRadius: 8))

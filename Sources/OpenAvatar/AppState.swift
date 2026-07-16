@@ -70,6 +70,7 @@ final class AppState: ObservableObject {
     private(set) lazy var proactive = ProactiveEngine(router: router, store: store)
     private(set) lazy var followUpExtractor = FollowUpExtractor(router: router, store: store)
     private(set) lazy var nameGuesser = SpeakerNameGuesser(router: router, store: store)
+    private(set) lazy var sanitizer = ReviewSanitizer(router: router)
 
     private(set) lazy var diarizer = SpeakerDiarizer()
     private lazy var calendar = GoogleCalendarClient(
@@ -156,6 +157,19 @@ final class AppState: ObservableObject {
                 // Final detection pass, then open the post-call review sheet.
                 if let fresh = try? await detector.flush(callID: callID) {
                     detectedDecisions.append(contentsOf: fresh)
+                }
+
+                // Sanity pass before the user sees anything: collapse items
+                // that describe the same task worded differently. Dropped ones
+                // are recorded as dismissed-duplicate, not deleted, so they
+                // stay visible under "Show handled".
+                if detectedDecisions.count >= 2 {
+                    let (kept, droppedIDs) = await sanitizer.dedupe(detectedDecisions)
+                    for id in droppedIDs {
+                        try? store.updateDecisionStatus(id, status: .dismissed,
+                                                        dismissReason: .duplicate)
+                    }
+                    detectedDecisions = kept
                 }
                 let summary = detectedDecisions.map(\.summary).joined(separator: "; ")
                 try? store.endCall(callID, summary: summary.isEmpty ? nil : summary)
@@ -445,6 +459,32 @@ final class AppState: ObservableObject {
             }
         }
         Task { await diarizer.reset() }
+    }
+
+    /// Break one call's voice out of a wrongly-matched profile (the inverse of
+    /// merge): that call's segments move to a fresh "Speaker N" the user can
+    /// rename, while the original person keeps their name and other calls.
+    /// Returns the new profile's id so the UI can focus the rename field.
+    func detachSpeaker(callID: UUID, from sourceID: String) -> String? {
+        guard let source = UUID(uuidString: sourceID) else { return nil }
+        do {
+            guard let newID = try store.detachSpeaker(callID: callID, from: source) else {
+                return nil
+            }
+            if callID == currentCallID {
+                let label = (try? store.allSpeakerProfiles())?
+                    .first { $0.id == newID }?.displayLabel ?? "Others"
+                for i in liveSegments.indices where liveSegments[i].speakerID == sourceID {
+                    liveSegments[i].speakerID = newID.uuidString
+                    liveSegments[i].speaker = label
+                }
+            }
+            Task { await diarizer.reset() }
+            return newID.uuidString
+        } catch {
+            reportError(error)
+            return nil
+        }
     }
 
     private func makeTranscriber() -> Transcriber {
