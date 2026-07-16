@@ -25,7 +25,10 @@ jobs:
   build-and-test:
     name: Build & test (macOS)
     runs-on: macos-15
-    timeout-minutes: 30
+    # Release runs wait on Apple's notarization queue — up to ~1h for a new
+    # account's first submission (it killed v1.10.0 and v1.11.0 at 30m).
+    # Ordinary pushes/PRs keep the tight timeout for fast hang detection.
+    timeout-minutes: ${{ (startsWith(github.ref, 'refs/tags/v') || (github.event_name == 'workflow_dispatch' && inputs.release_tag != '')) && 120 || 30 }}
     # Only tag pushes or a manual dispatch carrying a release_tag package the app.
     # Ordinary branch pushes / PRs stop after build + test.
     env:
