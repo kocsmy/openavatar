@@ -23,7 +23,7 @@ struct LiveTranscriptView: View {
                         .foregroundStyle(.secondary)
                         .multilineTextAlignment(.center)
                 }
-                .frame(maxWidth: .infinity, minHeight: 90, alignment: .center)
+                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .center)
                 .padding(.vertical, 12)
             } else {
                 ScrollViewReader { proxy in
@@ -35,7 +35,7 @@ struct LiveTranscriptView: View {
                             }
                         }
                     }
-                    .frame(maxHeight: 340)
+                    .frame(maxHeight: .infinity)   // fill the popover's constant-height region
                     .onChange(of: app.liveSegments.count) { _, _ in
                         if let last = app.liveSegments.last {
                             withAnimation { proxy.scrollTo(last.id, anchor: .bottom) }
