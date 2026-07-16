@@ -12,8 +12,6 @@ struct SettingsView: View {
                 .tabItem { Label("Models", systemImage: "brain") }
             IntegrationsSettingsTab()
                 .tabItem { Label("Integrations", systemImage: "puzzlepiece.extension") }
-            CalendarSettingsTab()
-                .tabItem { Label("Calendar", systemImage: "calendar") }
             TrustMatrixTab()
                 .tabItem { Label("Trust", systemImage: "checkmark.shield") }
             MemorySettingsTab()
@@ -270,9 +268,12 @@ struct SecretField: View {
     }
 }
 
-// MARK: - Calendar (Google)
+// MARK: - Google Calendar (rendered inside the Integrations tab)
 
-struct CalendarSettingsTab: View {
+/// The Google Calendar integration, as embeddable Form sections. Lives in the
+/// Integrations tab alongside GitHub/Slack/Linear/Email — it's the one
+/// integration that reads context (who's on the call) instead of executing.
+struct GoogleCalendarSections: View {
     @EnvironmentObject var settings: SettingsStore
 
     @State private var clientSecret = ""
@@ -285,19 +286,20 @@ struct CalendarSettingsTab: View {
     private let hasBuiltInClient = GoogleOAuth.shared.hasBuiltInClient
 
     var body: some View {
-        Form {
-            Section("Google Calendar") {
-                Toggle("Identify who's on the call from my calendar", isOn: $settings.calendarEnabled)
-                Text("When you start listening, OpenAvatar looks up the current event and offers each attendee's name to label the voices it hears. On a 1:1 it pre-fills the other person automatically. Read-only — it never changes your calendar.")
-                    .font(.caption).foregroundStyle(.secondary)
-            }
-
-            Section("Connection") {
+        Group {
+            Section("Google Calendar — who's on the call (read-only)") {
                 if connected {
                     HStack {
                         Label("Connected to Google Calendar", systemImage: "checkmark.seal.fill")
                             .foregroundStyle(.green)
                         Spacer()
+                        Button {
+                            testFetch()
+                        } label: {
+                            Label("Test", systemImage: "arrow.clockwise")
+                        }
+                        .disabled(connecting)
+                        .help("Read my current calendar event")
                         Button("Disconnect") {
                             Task {
                                 await GoogleOAuth.shared.disconnect()
@@ -308,54 +310,49 @@ struct CalendarSettingsTab: View {
                             }
                         }
                     }
-                    Button {
-                        testFetch()
-                    } label: {
-                        Label("Test — read my current event", systemImage: "arrow.clockwise")
-                    }
-                    .disabled(connecting)
                     if let eventPreview {
                         Text(eventPreview).font(.caption).foregroundStyle(.secondary)
                     }
+                    Toggle("Identify who's on the call from my calendar", isOn: $settings.calendarEnabled)
+                    Text("When you start listening, OpenAvatar looks up the current event and offers each attendee's name to label the voices it hears. On a 1:1 it pre-fills the other person automatically. It never changes your calendar.")
+                        .font(.caption).foregroundStyle(.secondary)
                 } else {
-                    Button {
-                        connect()
-                    } label: {
-                        if connecting { ProgressView().controlSize(.small) }
-                        else { Label("Connect Google Calendar", systemImage: "person.badge.key") }
-                    }
-                    .buttonStyle(.borderedProminent)
-                    .disabled(connecting || !isConfigured)
-                    if hasBuiltInClient {
-                        Text("One click — sign in with Google and approve read-only calendar access. Your tokens stay in your Keychain on this Mac.")
-                            .font(.caption).foregroundStyle(.secondary)
-                    } else if !isConfigured {
-                        Text("Add an OAuth client under Advanced first.")
-                            .font(.caption).foregroundStyle(.orange)
+                    HStack {
+                        Button {
+                            connect()
+                        } label: {
+                            if connecting { ProgressView().controlSize(.small) }
+                            else { Label("Connect Google Calendar", systemImage: "person.badge.key") }
+                        }
+                        .buttonStyle(.borderedProminent)
+                        .disabled(connecting || !isConfigured)
+                        if hasBuiltInClient {
+                            Text("One click — pre-fills who you're talking to from your calendar. Tokens stay in your Keychain.")
+                                .font(.caption).foregroundStyle(.secondary)
+                        } else if !isConfigured {
+                            Text("Add an OAuth client under Advanced first.")
+                                .font(.caption).foregroundStyle(.orange)
+                        }
                     }
                 }
                 if let status {
                     Text(status).font(.caption).foregroundStyle(.secondary)
                         .textSelection(.enabled)
                 }
-            }
-
-            if hasBuiltInClient {
-                Section {
+                if hasBuiltInClient {
                     DisclosureGroup("Advanced — use your own Google app") {
                         oauthCredentialFields
                         setupInstructions
                     }
                 }
-            } else {
-                Section("OAuth credentials (from your Google Cloud project)") {
+            }
+            if !hasBuiltInClient {
+                Section("Google Calendar — OAuth credentials (from your Google Cloud project)") {
                     oauthCredentialFields
+                    setupInstructions
                 }
-                Section("Setup") { setupInstructions }
             }
         }
-        .formStyle(.grouped)
-        .padding()
         .onAppear {
             // Reconcile pre-existing installs: earlier versions could leave you
             // connected with the feature toggle still off (nothing turned it on
@@ -637,6 +634,10 @@ struct IntegrationsSettingsTab: View {
 
     var body: some View {
         Form {
+            // The one-click, read-context integration leads; token-based
+            // executors follow; extensibility (manifests, MCP) comes last.
+            GoogleCalendarSections()
+
             Section("GitHub — fine-grained PAT (repo contents + pull requests)") {
                 SecretField(label: "Personal access token", text: $github, saved: $githubSaved) {
                     KeychainStore.shared.set(github, for: .githubToken)
