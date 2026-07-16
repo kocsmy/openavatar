@@ -232,6 +232,10 @@ struct SpeakerLibraryRow: View {
     let others: [SpeakerProfile]
     var onCommit: (String?) -> Void
     var onMerge: (UUID) -> Void
+    /// When set, shows "Not them" — moves this call's voice out to a fresh
+    /// speaker (the inverse of merge, for a new person matched to the wrong
+    /// existing fingerprint).
+    var onDetach: (() -> Void)?
 
     @State private var draft = ""
 
@@ -261,6 +265,15 @@ struct SpeakerLibraryRow: View {
                 .controlSize(.small)
                 .fixedSize()
                 .help("Combine this voice into another (this one disappears)")
+            }
+            if let onDetach {
+                Button {
+                    onDetach()
+                } label: {
+                    Label("Not them", systemImage: "person.crop.circle.badge.minus")
+                }
+                .controlSize(.small)
+                .help("Wrong person? Move this call's voice to a new, separate speaker — the original keeps their name and other calls")
             }
             Text("\(profile.sampleCount) utterances")
                 .font(.caption2).foregroundStyle(.tertiary)
@@ -346,9 +359,14 @@ struct TranscriptsSettingsTab: View {
                                         app.mergeSpeaker(sourceID: profile.id.uuidString,
                                                          into: targetID.uuidString)
                                         reload(callID: callID)
+                                    },
+                                    onDetach: {
+                                        _ = app.detachSpeaker(callID: callID,
+                                                              from: profile.id.uuidString)
+                                        reload(callID: callID)
                                     })
                             }
-                            Text("Names are auto-detected from the conversation when possible — fix or clear any guess. Merging folds a duplicate voice into another, across all calls.")
+                            Text("Names are auto-detected from the conversation when possible — fix or clear any guess. Merging folds a duplicate voice into another, across all calls. \"Not them\" splits this call's voice out to a new speaker when someone was matched to the wrong person.")
                                 .font(.caption2).foregroundStyle(.tertiary)
                         }
                         .padding(.top, 4)

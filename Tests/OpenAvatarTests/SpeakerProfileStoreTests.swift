@@ -104,4 +104,65 @@ final class SpeakerProfileStoreTests: XCTestCase {
             createdAt: now, updatedAt: now))
         XCTAssertEqual(try store.nextSpeakerOrdinal(), 2)
     }
+
+    func testDetachMovesOnlyThatCallToANewUnnamedSpeaker() throws {
+        // The "Nick got labeled Vasilis" fix: detaching one call's voice moves
+        // ONLY that call's segments to a fresh unnamed profile; the named
+        // profile keeps its name and its other calls untouched.
+        let store = try ContextStore(inMemory: true)
+        let now = Date()
+        let vasilis = UUID()
+        try store.insertSpeakerProfile(SpeakerProfile(
+            id: vasilis, name: "Vasilis", ordinal: 1, embedding: [1, 0, 0],
+            sampleCount: 10, createdAt: now, updatedAt: now))
+
+        let earlierCall = try store.startCall(app: "Zoom")
+        try store.insert([
+            TranscriptSegment(text: "it's really Vasilis here", t0: 0, t1: 1, source: .system,
+                              confidence: 0.9, speaker: "Vasilis", speakerID: vasilis.uuidString)
+        ], callID: earlierCall)
+
+        let nickCall = try store.startCall(app: "Zoom")
+        try store.insert([
+            TranscriptSegment(text: "hey, Nick speaking", t0: 0, t1: 1, source: .system,
+                              confidence: 0.9, speaker: "Vasilis", speakerID: vasilis.uuidString),
+            TranscriptSegment(text: "sounds good", t0: 1, t1: 2, source: .system,
+                              confidence: 0.9, speaker: "Vasilis", speakerID: vasilis.uuidString)
+        ], callID: nickCall)
+
+        let newID = try XCTUnwrap(store.detachSpeaker(callID: nickCall, from: vasilis))
+
+        // Nick's call now belongs entirely to the new, unnamed "Speaker 2".
+        let nickSegments = try store.segments(callID: nickCall)
+        XCTAssertTrue(nickSegments.allSatisfy { $0.speakerID == newID.uuidString })
+        XCTAssertTrue(nickSegments.allSatisfy { $0.speaker == "Speaker 2" })
+
+        // Vasilis keeps his name, his earlier call, and sheds the two
+        // utterances that left with the detach.
+        let profiles = try store.allSpeakerProfiles()
+        let kept = try XCTUnwrap(profiles.first { $0.id == vasilis })
+        XCTAssertEqual(kept.name, "Vasilis")
+        XCTAssertEqual(kept.sampleCount, 8)
+        XCTAssertEqual(try store.segments(callID: earlierCall).first?.speakerID,
+                       vasilis.uuidString)
+
+        let fresh = try XCTUnwrap(profiles.first { $0.id == newID })
+        XCTAssertNil(fresh.name)
+        XCTAssertEqual(fresh.ordinal, 2)
+        XCTAssertEqual(fresh.sampleCount, 2)
+        XCTAssertEqual(fresh.embedding, kept.embedding)   // inherits the centroid
+    }
+
+    func testDetachWithNoSegmentsOnCallIsANoOp() throws {
+        let store = try ContextStore(inMemory: true)
+        let now = Date()
+        let profile = UUID()
+        try store.insertSpeakerProfile(SpeakerProfile(
+            id: profile, name: "Alice", ordinal: 1, embedding: [1, 0],
+            sampleCount: 3, createdAt: now, updatedAt: now))
+        let emptyCall = try store.startCall(app: nil)
+
+        XCTAssertNil(try store.detachSpeaker(callID: emptyCall, from: profile))
+        XCTAssertEqual(try store.allSpeakerProfiles().count, 1)
+    }
 }

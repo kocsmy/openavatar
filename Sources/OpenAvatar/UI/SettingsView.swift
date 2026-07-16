@@ -126,6 +126,7 @@ struct TranscriptionSettingsTab: View {
             if settings.transcriptionMode == .local {
                 Section("Local transcription (whisper.cpp)") {
                     WhisperSetupView(service: whisperSetup)
+                    WhisperModelPickerView(service: whisperSetup)
                     DisclosureGroup("Advanced: paths", isExpanded: $showAdvanced) {
                         TextField("whisper-cli path", text: $settings.whisperCLIPath)
                         TextField("Model path (.bin)", text: $settings.whisperModelPath)
@@ -160,7 +161,7 @@ struct WhisperSetupView: View {
                 Image(systemName: ready ? "checkmark.circle.fill" : "arrow.down.circle")
                     .foregroundStyle(ready ? Color.green : Color.accentColor)
                 Text(ready ? "Local transcription is ready."
-                           : "One click installs whisper.cpp (via Homebrew) and downloads the base.en model (~150 MB).")
+                           : "One click installs whisper.cpp (via Homebrew) and downloads the multilingual base model (~150 MB).")
                     .font(.callout)
                 Spacer()
                 Button(ready ? "Re-check" : "Set up automatically") {
@@ -178,8 +179,8 @@ struct WhisperSetupView: View {
                 Label { Text("Installing whisper-cpp via Homebrew (can take a few minutes)…") }
                     icon: { ProgressView().controlSize(.small) }
                     .font(.caption)
-            case .downloadingModel:
-                Label { Text("Downloading base.en model (~150 MB)…") }
+            case .downloadingModel(let model):
+                Label { Text("Downloading \(model.shortName) model (\(model.sizeLabel))…") }
                     icon: { ProgressView().controlSize(.small) }
                     .font(.caption)
             case .done(let message):
@@ -190,6 +191,42 @@ struct WhisperSetupView: View {
                     .font(.caption).foregroundStyle(.red)
                     .textSelection(.enabled)
             }
+        }
+    }
+}
+
+/// Model-quality picker for local transcription. Switching downloads the
+/// chosen model (once) and repoints the model path; already-downloaded models
+/// switch instantly.
+struct WhisperModelPickerView: View {
+    @ObservedObject var service: WhisperSetupService
+    @EnvironmentObject var settings: SettingsStore
+    @State private var selected: WhisperModel = .base
+
+    private var active: WhisperModel? { WhisperModel.from(path: settings.whisperModelPath) }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            HStack(spacing: 8) {
+                Picker("Transcription quality", selection: $selected) {
+                    ForEach(WhisperModel.allCases) { model in
+                        Text(model.displayName).tag(model)
+                    }
+                }
+                if selected != active {
+                    Button("Download & switch") {
+                        Task { await service.run(settings: settings, model: selected) }
+                    }
+                    .controlSize(.small)
+                    .disabled(service.isBusy)
+                }
+            }
+            Text("Bigger models transcribe noticeably better, especially with accents, names, and crosstalk — Small is the sweet spot for most Macs; Large v3 Turbo is the best that still keeps up live. Downloads happen once.")
+                .font(.caption).foregroundStyle(.secondary)
+        }
+        .onAppear { selected = active ?? .base }
+        .onChange(of: settings.whisperModelPath) { _, _ in
+            selected = active ?? selected
         }
     }
 }

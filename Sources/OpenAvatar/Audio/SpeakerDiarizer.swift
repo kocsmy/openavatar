@@ -29,6 +29,11 @@ actor SpeakerDiarizer {
     /// worse, unfixable-in-place error, whereas over-splitting one voice into a
     /// few "Speaker N" entries is easily corrected with Merge. Higher = stricter.
     private let joinThreshold: Float = 0.84
+    /// Joining a profile that carries a NAME is held to a stricter bar still:
+    /// showing a new person under someone else's name is the most jarring
+    /// mistake this system can make. A borderline voice becomes "Speaker N"
+    /// instead, which the user can rename or merge.
+    private let namedJoinThreshold: Float = 0.88
     /// Utterances quieter/shorter than these are left as "Others".
     private let minSamples = 16_000 / 4        // 0.25 s at 16 kHz
     private let minRMS: Float = 0.006
@@ -68,7 +73,9 @@ actor SpeakerDiarizer {
             if sim > bestSim { bestSim = sim; bestIndex = i }
         }
 
-        if bestIndex >= 0 && bestSim >= joinThreshold {
+        let required = bestIndex >= 0 && profiles[bestIndex].name != nil
+            ? namedJoinThreshold : joinThreshold
+        if bestIndex >= 0 && bestSim >= required {
             // Update the running-average centroid and persist it.
             var p = profiles[bestIndex]
             let n = Float(p.sampleCount)
