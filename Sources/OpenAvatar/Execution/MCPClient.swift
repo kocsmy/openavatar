@@ -14,17 +14,38 @@ struct MCPServerConfig: Codable, Identifiable, Hashable, Sendable {
     var integrationID: IntegrationID { IntegrationID("mcp-\(id)") }
 
     static func loadAll() -> [MCPServerConfig] {
-        guard let data = UserDefaults.standard.data(forKey: "mcpServers"),
-              let configs = try? JSONDecoder().decode([MCPServerConfig].self, from: data) else {
-            return []
+        guard let data = UserDefaults.standard.data(forKey: "mcpServers") else { return [] }
+        // Decode element-by-element so one malformed entry can't discard every
+        // configured server, and never wipe silently: if non-empty stored data
+        // yields no usable configs, stash a backup so the user's servers stay
+        // recoverable instead of being overwritten by the next saveAll().
+        if let wrapped = try? JSONDecoder().decode([FailableDecodable<MCPServerConfig>].self, from: data) {
+            let configs = wrapped.compactMap { $0.value }
+            if configs.isEmpty && !wrapped.isEmpty {
+                UserDefaults.standard.set(data, forKey: "mcpServers.backup")
+            }
+            return configs
         }
-        return configs
+        // Top-level decode failed entirely — preserve the raw blob before any
+        // subsequent save can overwrite it.
+        UserDefaults.standard.set(data, forKey: "mcpServers.backup")
+        return []
     }
 
     static func saveAll(_ configs: [MCPServerConfig]) {
         if let data = try? JSONEncoder().encode(configs) {
             UserDefaults.standard.set(data, forKey: "mcpServers")
         }
+    }
+}
+
+/// Decodes each array element independently: a single malformed entry becomes
+/// `nil` instead of failing the whole decode (which would otherwise drop every
+/// configured server).
+private struct FailableDecodable<T: Decodable>: Decodable {
+    let value: T?
+    init(from decoder: Decoder) throws {
+        value = try? decoder.singleValueContainer().decode(T.self)
     }
 }
 

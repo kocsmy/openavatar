@@ -206,7 +206,7 @@ actor ActionPlanner {
                 case "read_file":
                     let path = call.arguments["path"]?.stringValue ?? ""
                     let url = workspace.directory.appendingPathComponent(path)
-                    let content = (try? String(contentsOf: url, encoding: .utf8)) ?? "(file not found)"
+                    let content = Self.confinedContents(of: url, within: workspace.directory)
                     toolReplies.append(ChatMessage(role: .tool,
                                                    content: String(content.prefix(20_000)),
                                                    toolCallID: call.id, toolName: call.name))
@@ -223,6 +223,20 @@ actor ActionPlanner {
             request.messages.append(contentsOf: toolReplies)
         }
         throw AppError.integration("Code-change planning did not converge")
+    }
+
+    /// Reads a file only if it resolves to a location inside the workspace.
+    /// The `path` comes from the planning model, which can be influenced by
+    /// transcript content, so it must not be able to traverse out of the repo
+    /// (via "../" or an absolute path) and read arbitrary files on disk.
+    private static func confinedContents(of url: URL, within root: URL) -> String {
+        let rootPath = root.standardizedFileURL.path
+        let resolved = url.standardizedFileURL.path
+        let rootPrefix = rootPath.hasSuffix("/") ? rootPath : rootPath + "/"
+        guard resolved == rootPath || resolved.hasPrefix(rootPrefix) else {
+            return "(access denied: path is outside the repository)"
+        }
+        return (try? String(contentsOf: url.standardizedFileURL, encoding: .utf8)) ?? "(file not found)"
     }
 
     private static let readFileTool = ToolSpec(
