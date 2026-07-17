@@ -121,6 +121,12 @@ struct TranscriptionSettingsTab: View {
                 Text("On-device per-voice diarization labels each participant on the call (Speaker 1, Speaker 2…) — your own mic is always \"You\". Works fully offline; best with a few clearly-distinct voices.")
                     .font(.caption).foregroundStyle(.secondary)
             }
+            Section("Custom vocabulary") {
+                TextField("Names & jargon, comma-separated (e.g. PostHog, Termly, Linear)",
+                          text: $settings.customVocabulary)
+                Text("Transcription is biased toward spelling these correctly. Speaker names and calendar attendees are added automatically on each call.")
+                    .font(.caption).foregroundStyle(.secondary)
+            }
             if settings.transcriptionMode == .local {
                 Section("Local transcription (whisper.cpp)") {
                     WhisperSetupView(service: whisperSetup)
