@@ -384,11 +384,22 @@ final class AppState: ObservableObject {
                     }
                 }
 
-                try store.insert(segments, callID: callID)
-                liveSegments.append(contentsOf: segments)
+                // Clean streaming artifacts: chunk-overlap duplicates (the
+                // capture overlaps chunks by ~2s) and whisper's silence
+                // hallucinations. A fuller re-decode replaces its partial.
+                let (kept, deletePrevious) = TranscriptSanitizer.reconcile(
+                    incoming: segments, previous: Array(liveSegments.suffix(12)))
+                if !deletePrevious.isEmpty {
+                    try? store.deleteSegments(Array(deletePrevious))
+                    liveSegments.removeAll { deletePrevious.contains($0.id) }
+                }
+                guard !kept.isEmpty else { return }
+
+                try store.insert(kept, callID: callID)
+                liveSegments.append(contentsOf: kept)
                 if liveSegments.count > 200 { liveSegments.removeFirst(liveSegments.count - 200) }
 
-                let fresh = try await detector.ingest(segments: segments, callID: callID)
+                let fresh = try await detector.ingest(segments: kept, callID: callID)
                 for decision in fresh {
                     route(decision)
                 }
@@ -524,19 +535,40 @@ final class AppState: ObservableObject {
     }
 
     private func makeTranscriber() -> Transcriber {
+        let prompt = transcriptionPrompt()
         switch settings.transcriptionMode {
         case .local:
             return WhisperLocalTranscriber(cliPath: settings.whisperCLIPath,
                                            modelPath: settings.whisperModelPath,
-                                           language: settings.transcriptionLanguage)
+                                           language: settings.transcriptionLanguage,
+                                           prompt: prompt)
         case .cloud:
             let key = KeychainStore.shared.get(.cloudSTTAPIKey) ?? ""
             return CloudTranscriber(apiKey: key,
                                     baseURL: URL(string: settings.cloudSTTBaseURL)
                                         ?? URL(string: "https://api.openai.com/v1")!,
                                     model: settings.cloudSTTModel,
-                                    language: settings.transcriptionLanguage)
+                                    language: settings.transcriptionLanguage,
+                                    prompt: prompt)
         }
+    }
+
+    /// Decoder-bias context for transcription: names and jargon whisper should
+    /// spell correctly. Custom vocabulary from Settings, plus everything we
+    /// already know about this call — named voices and calendar attendees.
+    /// (This is how meeting tools get "PostHog" right where stock whisper
+    /// hears "post-hog".)
+    private func transcriptionPrompt() -> String {
+        var terms = settings.customVocabulary
+            .split(separator: ",")
+            .map { $0.trimmingCharacters(in: .whitespaces) }
+        terms.append(settings.assistantName)
+        terms += ((try? store.allSpeakerProfiles()) ?? []).compactMap(\.name)
+        terms += callAttendees.map(\.name)
+        var seen = Set<String>()
+        let unique = terms.filter { !$0.isEmpty && seen.insert($0.lowercased()).inserted }
+        guard !unique.isEmpty else { return "" }
+        return "Glossary: \(unique.prefix(40).joined(separator: ", "))."
     }
 
     /// Route a fresh decision: Active mode + directly addressed → plan now;

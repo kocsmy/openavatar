@@ -12,6 +12,9 @@ struct WhisperLocalTranscriber: Transcriber {
     let modelPath: String
     /// BCP-47-ish whisper language code, or "auto" to detect per chunk.
     var language: String = "auto"
+    /// Decoder-bias context: names and jargon whisper should spell correctly
+    /// (product names, participants). Empty = no biasing.
+    var prompt: String = ""
 
     func transcribe(_ chunk: AudioChunk) async throws -> [TranscriptSegment] {
         guard FileManager.default.isExecutableFile(atPath: cliPath) else {
@@ -35,12 +38,16 @@ struct WhisperLocalTranscriber: Transcriber {
 
         let process = Process()
         process.executableURL = URL(fileURLWithPath: cliPath)
-        process.arguments = [
+        var arguments = [
             "-m", modelPath,
             "-f", wavURL.path,
             "--output-json", "--output-file", outBase,
             "--no-prints", "--language", language
         ]
+        if !prompt.isEmpty {
+            arguments += ["--prompt", prompt]
+        }
+        process.arguments = arguments
         let stderrPipe = Pipe()
         process.standardError = stderrPipe
         process.standardOutput = Pipe()

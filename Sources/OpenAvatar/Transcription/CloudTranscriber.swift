@@ -9,6 +9,9 @@ struct CloudTranscriber: Transcriber {
     let model: String     // e.g. whisper-1
     /// "auto" (omit language → server detects) or an ISO-639-1 code like "hu".
     var language: String = "auto"
+    /// Decoder-bias context: names and jargon the server should spell
+    /// correctly. Empty = omitted from the request.
+    var prompt: String = ""
 
     func transcribe(_ chunk: AudioChunk) async throws -> [TranscriptSegment] {
         let wav = WAVEncoder.wavData(fromPCM: chunk.pcm)
@@ -23,6 +26,9 @@ struct CloudTranscriber: Transcriber {
         // Omit "language" for auto-detect; pass the ISO code otherwise.
         if language != "auto", !language.isEmpty {
             addField("language", language)
+        }
+        if !prompt.isEmpty {
+            addField("prompt", prompt)
         }
         body.append(Data("--\(boundary)\r\nContent-Disposition: form-data; name=\"file\"; filename=\"audio.wav\"\r\nContent-Type: audio/wav\r\n\r\n".utf8))
         body.append(wav)

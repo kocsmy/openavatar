@@ -301,6 +301,18 @@ final class ContextStore: @unchecked Sendable {
         }
     }
 
+    /// Remove segments that turned out to be chunk-overlap duplicates of a
+    /// newer, fuller decode (see TranscriptSanitizer).
+    func deleteSegments(_ ids: [UUID]) throws {
+        guard !ids.isEmpty else { return }
+        try dbQueue.write { db in
+            for id in ids {
+                try db.execute(sql: "DELETE FROM transcript_segments WHERE id = ?",
+                               arguments: [id.uuidString])
+            }
+        }
+    }
+
     // MARK: - Speaker profiles (persistent voice fingerprints)
 
     func allSpeakerProfiles() throws -> [SpeakerProfile] {

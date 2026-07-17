@@ -66,6 +66,10 @@ final class SettingsStore: ObservableObject {
     @Published var transcriptionLanguage: String { didSet { defaults.set(transcriptionLanguage, forKey: "transcriptionLanguage") } }
     /// Per-voice diarization on the system-audio channel (Speaker 1/2/3…).
     @Published var diarizationEnabled: Bool { didSet { defaults.set(diarizationEnabled, forKey: "diarizationEnabled") } }
+    /// Comma-separated names/jargon to bias transcription toward spelling
+    /// correctly (product names like "PostHog, Termly, Linear"). Speaker and
+    /// calendar-attendee names are added automatically at call time.
+    @Published var customVocabulary: String { didSet { defaults.set(customVocabulary, forKey: "customVocabulary") } }
 
     // MARK: LLM
     @Published var openAIBaseURL: String { didSet { defaults.set(openAIBaseURL, forKey: "openAIBaseURL") } }
@@ -118,6 +122,7 @@ final class SettingsStore: ObservableObject {
         cloudSTTModel = defaults.string(forKey: "cloudSTTModel") ?? "whisper-1"
         transcriptionLanguage = defaults.string(forKey: "transcriptionLanguage") ?? "auto"
         diarizationEnabled = (defaults.object(forKey: "diarizationEnabled") as? Bool) ?? true
+        customVocabulary = defaults.string(forKey: "customVocabulary") ?? ""
 
         openAIBaseURL = defaults.string(forKey: "openAIBaseURL") ?? "https://api.openai.com/v1"
         ollamaBaseURL = defaults.string(forKey: "ollamaBaseURL") ?? "http://localhost:11434"
