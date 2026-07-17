@@ -28,7 +28,10 @@ struct MCPIntegration: ActionIntegration {
     /// loosen per-tool in the trust matrix. Destructive-sounding names are
     /// escalated.
     func riskClass(for tool: String) -> RiskClass {
-        let destructiveMarkers = ["delete", "remove", "merge", "send", "publish", "deploy", "drop"]
+        let destructiveMarkers = ["delete", "remove", "merge", "send", "publish",
+                                  "deploy", "drop", "archive", "wipe", "revoke",
+                                  "purge", "truncate", "cancel", "destroy", "reset",
+                                  "close", "disable", "uninstall", "terminate", "erase"]
         if destructiveMarkers.contains(where: { tool.lowercased().contains($0) }) {
             return .destructive
         }

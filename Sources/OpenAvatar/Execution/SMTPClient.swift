@@ -20,6 +20,9 @@ final class SMTPClient {
 
     func send(username: String, password: String, from: String,
               to recipients: [String], subject: String, body: String) async throws {
+        // Defense in depth against header/command injection (also validated at
+        // the EmailIntegration boundary): addresses must carry no CR/LF/NUL.
+        try EmailAddressGuard.validate(recipients + [from])
         try await connect()
         defer { connection.cancel() }
 

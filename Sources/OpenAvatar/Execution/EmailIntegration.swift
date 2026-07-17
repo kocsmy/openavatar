@@ -58,6 +58,9 @@ struct EmailIntegration: ActionIntegration {
                                 url: nil, revertHandle: nil)
         case "send_email":
             guard !to.isEmpty else { throw AppError.integration("send_email: no recipients") }
+            // Recipients/from are transcript-derived; reject control characters
+            // so they can't inject extra SMTP commands or spoofed headers.
+            try EmailAddressGuard.validate(to + [config.fromAddress])
             switch config.backend {
             case .smtp:
                 guard let password = config.smtpPassword, !config.smtpHost.isEmpty else {
@@ -113,6 +116,18 @@ struct EmailIntegration: ActionIntegration {
             } catch {
                 return IntegrationHealth(ok: false, message: Redactor.redact(error.localizedDescription))
             }
+        }
+    }
+}
+
+/// Guards against SMTP command / RFC 5322 header injection. Email addresses
+/// flow from transcript-derived planner output, so a value containing CR/LF/NUL
+/// could inject an extra `RCPT TO` command or a spoofed header (e.g. a hidden
+/// `Bcc:`) and exfiltrate mail past the user's preview.
+enum EmailAddressGuard {
+    static func validate(_ addresses: [String]) throws {
+        for address in addresses where address.contains(where: { $0 == "\r" || $0 == "\n" || $0 == "\0" }) {
+            throw AppError.integration("Invalid email address (contains control characters)")
         }
     }
 }

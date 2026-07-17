@@ -50,6 +50,17 @@ final class TrustPolicyTests: XCTestCase {
         XCTAssertEqual(verdict, .askFirst)
     }
 
+    /// Spec §5.6: a non-destructive (`.write`) action requested by a non-user
+    /// speaker must still Ask first, even when the matrix marks it autonomous —
+    /// the planner promises the user that non-user requests need approval.
+    func testWriteFromSystemSourceAlwaysAsksFirst() {
+        // linear.create_issue is .autonomous in Active mode by default.
+        let verdict = engine.verdict(for: step(.linear, "create_issue", risk: .write),
+                                     mode: .active, decisionSource: .system,
+                                     matrix: .defaults)
+        XCTAssertEqual(verdict, .askFirst)
+    }
+
     /// Spec §4.7: destructive autonomy requires ≥10 clean approved executions.
     func testGraduatedAutonomyForDestructiveActions() throws {
         var matrix = TrustMatrix.defaults

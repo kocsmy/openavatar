@@ -3,8 +3,11 @@ import Foundation
 /// Spec §4.7 — decides, per action step, whether execution needs approval.
 ///
 /// Hard rules enforced here (not in prompts, not in UI):
-/// 1. `.destructive` steps triggered by an utterance from the system stream
-///    (a non-user speaker) are ALWAYS Ask first (spec §5.6).
+/// 1. ANY step triggered by an utterance from the system stream (a non-user
+///    speaker) is ALWAYS Ask first (spec §5.6). The planner prompt promises the
+///    user that requests spoken by other participants "will always require the
+///    user's explicit approval", so that guarantee is enforced here for every
+///    risk class, not just destructive ones.
 /// 2. `.destructive` steps run autonomously only after ≥10 approved executions
 ///    of that action type with no revert and no pre-approval edit
 ///    (graduated autonomy).
@@ -20,8 +23,12 @@ struct TrustPolicyEngine {
 
     func verdict(for step: ActionStep, mode: AssistantMode,
                  decisionSource: AudioSource, matrix: TrustMatrix) -> Verdict {
-        // Rule 1: destructive + non-user speaker → always ask.
-        if step.riskClass == .destructive && decisionSource == .system {
+        // Rule 1: any action requested by a non-user speaker → always ask.
+        // A `.write` step is not "safe" just because it isn't destructive: the
+        // user never spoke it, so it must not run autonomously regardless of the
+        // matrix (which otherwise marks e.g. linear.create_issue autonomous in
+        // Active mode).
+        if decisionSource == .system {
             return .askFirst
         }
 
