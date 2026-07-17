@@ -34,6 +34,21 @@ actor SpeakerDiarizer {
     /// mistake this system can make. A borderline voice becomes "Speaker N"
     /// instead, which the user can rename or merge.
     private let namedJoinThreshold: Float = 0.88
+    /// A voice already heard on THIS call rejoins at a friendlier bar: within
+    /// one call the same person drifts (level, distance, codec artifacts) far
+    /// more than two different people sound alike. Without this, every dip
+    /// below the join bar minted another permanent "Speaker N".
+    private let activeRejoinThreshold: Float = 0.78
+    /// A short, otherwise-unmatched utterance sticks with the previous speaker
+    /// when at least this similar, instead of becoming a stray.
+    private let continuityFloor: Float = 0.70
+    /// Utterances shorter than this may MATCH a voice but never mint a new
+    /// profile — sub-2s clips give unreliable embeddings, and one-utterance
+    /// "Speaker N" strays were the main fingerprinting complaint.
+    private let minSamplesForNewProfile = 16_000 * 2   // 2 s at 16 kHz
+    /// End-of-call cleanup bars (see consolidateCall).
+    private let strayFoldThreshold: Float = 0.75
+    private let namedAdoptThreshold: Float = 0.86
     /// Utterances quieter/shorter than these are left as "Others".
     private let minSamples = 16_000 / 4        // 0.25 s at 16 kHz
     private let minRMS: Float = 0.006
@@ -44,12 +59,26 @@ actor SpeakerDiarizer {
     private var loaded = false
     private let extractor = EmbeddingExtractor()
 
+    // Per-call working state (cleared by beginCall).
+    private var utterancesThisCall: [UUID: Int] = [:]
+    private var createdThisCall: Set<UUID> = []
+    private var lastSpeakerID: UUID?
+
     init(store: ContextStore = .shared) {
         self.store = store
     }
 
-    /// Load persisted fingerprints so voices are recognized across calls.
-    /// Called at the start of each call; cheap and idempotent.
+    /// Start of a call: reload persisted fingerprints and forget the previous
+    /// call's working state.
+    func beginCall() {
+        reset()
+        utterancesThisCall = [:]
+        createdThisCall = []
+        lastSpeakerID = nil
+    }
+
+    /// Reload persisted fingerprints (after a rename/merge/detach) WITHOUT
+    /// dropping which voices are active on the current call.
     func reset() {
         profiles = (try? store.allSpeakerProfiles()) ?? []
         loaded = true
@@ -73,25 +102,53 @@ actor SpeakerDiarizer {
             if sim > bestSim { bestSim = sim; bestIndex = i }
         }
 
-        let required = bestIndex >= 0 && profiles[bestIndex].name != nil
-            ? namedJoinThreshold : joinThreshold
-        if bestIndex >= 0 && bestSim >= required {
-            // Update the running-average centroid and persist it.
-            var p = profiles[bestIndex]
-            let n = Float(p.sampleCount)
-            if p.embedding.count == embedding.count {
-                for k in 0..<p.embedding.count {
-                    p.embedding[k] = (p.embedding[k] * n + embedding[k]) / (n + 1)
-                }
+        if bestIndex >= 0 {
+            // Rejoin bar: friendliest for a voice ESTABLISHED on this call
+            // (2+ utterances — a single-utterance voice doesn't get to capture
+            // the next speaker), strictest for a NAMED voice not heard yet.
+            let best = profiles[bestIndex]
+            let required: Float
+            if utterancesThisCall[best.id, default: 0] >= 2 {
+                required = activeRejoinThreshold
+            } else if best.name != nil {
+                required = namedJoinThreshold
+            } else {
+                required = joinThreshold
             }
-            p.sampleCount += 1
-            p.updatedAt = Date()
-            profiles[bestIndex] = p
-            try? store.updateSpeakerEmbedding(id: p.id, embedding: p.embedding, sampleCount: p.sampleCount)
-            return DiarizedSpeaker(id: p.id, label: p.displayLabel)
+            if bestSim >= required {
+                // Update the running-average centroid and persist it.
+                var p = best
+                let n = Float(p.sampleCount)
+                if p.embedding.count == embedding.count {
+                    for k in 0..<p.embedding.count {
+                        p.embedding[k] = (p.embedding[k] * n + embedding[k]) / (n + 1)
+                    }
+                }
+                p.sampleCount += 1
+                p.updatedAt = Date()
+                profiles[bestIndex] = p
+                try? store.updateSpeakerEmbedding(id: p.id, embedding: p.embedding, sampleCount: p.sampleCount)
+                utterancesThisCall[p.id, default: 0] += 1
+                lastSpeakerID = p.id
+                return DiarizedSpeaker(id: p.id, label: p.displayLabel)
+            }
         }
 
-        // Unseen voice → new persistent fingerprint.
+        // No confident match. Short clips never mint a profile: stick with the
+        // previous speaker when plausibly the same voice, else stay "Others" —
+        // a permanent one-utterance "Speaker N" helps nobody.
+        if samples.count < minSamplesForNewProfile {
+            if let last = lastSpeakerID,
+               let lastProfile = profiles.first(where: { $0.id == last }),
+               cosine(embedding, lastProfile.embedding) >= continuityFloor {
+                // No centroid update: weak evidence shouldn't shape the voice.
+                utterancesThisCall[last, default: 0] += 1
+                return DiarizedSpeaker(id: last, label: lastProfile.displayLabel)
+            }
+            return nil
+        }
+
+        // Unseen voice with solid evidence → new persistent fingerprint.
         let ordinal = (try? store.nextSpeakerOrdinal()) ?? (profiles.count + 1)
         let now = Date()
         let profile = SpeakerProfile(id: UUID(), name: nil, ordinal: ordinal,
@@ -99,7 +156,52 @@ actor SpeakerDiarizer {
                                      createdAt: now, updatedAt: now)
         profiles.append(profile)
         try? store.insertSpeakerProfile(profile)
+        createdThisCall.insert(profile.id)
+        utterancesThisCall[profile.id] = 1
+        lastSpeakerID = profile.id
         return DiarizedSpeaker(id: profile.id, label: profile.displayLabel)
+    }
+
+    /// End-of-call cleanup for over-splitting. Two passes:
+    /// 1. Low-evidence voices minted on this call fold into the call's
+    ///    dominant voice when acoustically close — these are the stray
+    ///    "Speaker N (1 utterance)" rows.
+    /// 2. If the dominant voice was itself minted this call (still unnamed)
+    ///    and closely matches a stored NAMED fingerprint, it folds into that
+    ///    person — so a known voice whose first utterance missed the strict
+    ///    named bar still ends the call under the right name.
+    /// Returns the merges performed so the live transcript can be relabeled.
+    func consolidateCall() -> [(source: UUID, target: UUID)] {
+        guard let heaviest = utterancesThisCall.max(by: { $0.value < $1.value }),
+              heaviest.value >= 3,
+              let dominant = profiles.first(where: { $0.id == heaviest.key })
+        else { return [] }
+        var merges: [(source: UUID, target: UUID)] = []
+
+        for (id, count) in utterancesThisCall
+        where id != dominant.id && createdThisCall.contains(id) && count < 3 {
+            guard let stray = profiles.first(where: { $0.id == id }), stray.name == nil,
+                  cosine(stray.embedding, dominant.embedding) >= strayFoldThreshold
+            else { continue }
+            try? store.mergeSpeaker(id, into: dominant.id)
+            merges.append((id, dominant.id))
+        }
+
+        if createdThisCall.contains(dominant.id), dominant.name == nil {
+            var bestNamed: SpeakerProfile?
+            var bestSim: Float = -1
+            for p in profiles where p.name != nil && p.id != dominant.id {
+                let sim = cosine(dominant.embedding, p.embedding)
+                if sim > bestSim { bestSim = sim; bestNamed = p }
+            }
+            if let named = bestNamed, bestSim >= namedAdoptThreshold {
+                try? store.mergeSpeaker(dominant.id, into: named.id)
+                merges.append((dominant.id, named.id))
+            }
+        }
+
+        if !merges.isEmpty { reset() }
+        return merges
     }
 
     var speakerCount: Int { profiles.count }

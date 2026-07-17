@@ -114,7 +114,7 @@ final class AppState: ObservableObject {
             isListening = true
             Task {
                 await detector.updateWakePhrase(settings.assistantName)
-                await diarizer.reset()   // reload voice fingerprints for this call
+                await diarizer.beginCall()   // reload fingerprints, fresh call state
             }
             refreshCalendar()            // identify who's on the call
         } catch {
@@ -180,6 +180,32 @@ final class AppState: ObservableObject {
                         callID: callID, callStart: callStart ?? Date()) {
                         for f in found { try? store.insertFollowUp(f) }
                         pendingFollowUps = found
+                    }
+                }
+
+                // Fold over-split voices back together before guessing names:
+                // stray low-evidence "Speaker N"s merge into the call's
+                // dominant voice, and a call-minted dominant voice adopts a
+                // matching stored name. The store relabels saved segments;
+                // mirror it into the live transcript here.
+                if settings.diarizationEnabled {
+                    let merges = await diarizer.consolidateCall()
+                    if !merges.isEmpty {
+                        var target: [String: String] = [:]
+                        for (s, t) in merges { target[s.uuidString] = t.uuidString }
+                        let labels = Dictionary(uniqueKeysWithValues:
+                            ((try? store.allSpeakerProfiles()) ?? [])
+                                .map { ($0.id.uuidString, $0.displayLabel) })
+                        for i in liveSegments.indices {
+                            guard var sid = liveSegments[i].speakerID else { continue }
+                            // Merges can chain (stray → dominant → named person).
+                            var hops = 0
+                            while let next = target[sid], hops < merges.count { sid = next; hops += 1 }
+                            if sid != liveSegments[i].speakerID {
+                                liveSegments[i].speakerID = sid
+                                liveSegments[i].speaker = labels[sid] ?? liveSegments[i].speaker
+                            }
+                        }
                     }
                 }
 
@@ -459,6 +485,16 @@ final class AppState: ObservableObject {
             }
         }
         Task { await diarizer.reset() }
+    }
+
+    /// Global cleanup of accumulated fingerprint over-splitting ("Tidy up
+    /// stray voices"). Folds near-duplicate low-evidence voices into their
+    /// nearest substantial match across all calls. Returns how many were folded.
+    func sweepStrayVoices() -> Int {
+        guard !isListening else { return 0 }
+        let merged = (try? store.sweepStrayProfiles()) ?? 0
+        if merged > 0 { Task { await diarizer.reset() } }
+        return merged
     }
 
     /// Break one call's voice out of a wrongly-matched profile (the inverse of
