@@ -49,11 +49,13 @@ final class DiarizationTests: XCTestCase {
     }
 
 #if canImport(Accelerate)
+    // New profiles require ≥2 s of audio, so creation-path tests use 2.5 s.
+
     func testDistinctPitchesGetDistinctSpeakers() async {
         let diarizer = makeDiarizer()
         // A low voice and a clearly higher voice.
-        let (lowChunk, lowSeg) = chunk(pitch: 110)   // ~male
-        let (highChunk, highSeg) = chunk(pitch: 240) // ~female
+        let (lowChunk, lowSeg) = chunk(pitch: 110, seconds: 2.5)   // ~male
+        let (highChunk, highSeg) = chunk(pitch: 240, seconds: 2.5) // ~female
         let a = await diarizer.label(for: lowSeg, in: lowChunk)
         let b = await diarizer.label(for: highSeg, in: highChunk)
         XCTAssertNotNil(a)
@@ -63,13 +65,34 @@ final class DiarizationTests: XCTestCase {
 
     func testSameVoiceStaysOneSpeaker() async {
         let diarizer = makeDiarizer()
-        let (c1, s1) = chunk(pitch: 130)
-        let (c2, s2) = chunk(pitch: 132)   // essentially the same voice
+        let (c1, s1) = chunk(pitch: 130, seconds: 2.5)
+        let (c2, s2) = chunk(pitch: 132, seconds: 2.5)   // essentially the same voice
         let a = await diarizer.label(for: s1, in: c1)
         let b = await diarizer.label(for: s2, in: c2)
         XCTAssertEqual(a?.id, b?.id, "The same voice should keep one fingerprint")
         let count = await diarizer.speakerCount
         XCTAssertEqual(count, 1)
+    }
+
+    /// The over-splitting fix: a short clip that matches nothing must never
+    /// mint a permanent "Speaker N" — the stray one-utterance speakers were
+    /// the top fingerprinting complaint on 1:1 calls.
+    func testShortUtteranceNeverMintsANewSpeaker() async {
+        let diarizer = makeDiarizer()
+
+        // A short clip with no established voices → no profile at all.
+        let (shortFirst, segFirst) = chunk(pitch: 200, seconds: 0.6)
+        _ = await diarizer.label(for: segFirst, in: shortFirst)
+        var count = await diarizer.speakerCount
+        XCTAssertEqual(count, 0, "A sub-2s clip must not create a fingerprint")
+
+        // Establish a real voice, then throw a short off-voice clip at it.
+        let (long, segLong) = chunk(pitch: 130, seconds: 2.5)
+        _ = await diarizer.label(for: segLong, in: long)
+        let (shortOdd, segOdd) = chunk(pitch: 260, seconds: 0.6)
+        _ = await diarizer.label(for: segOdd, in: shortOdd)
+        count = await diarizer.speakerCount
+        XCTAssertEqual(count, 1, "Short clips may match or stay Others, never mint")
     }
 
     /// A named voice keeps its name when it reappears in a later call.
@@ -78,15 +101,15 @@ final class DiarizationTests: XCTestCase {
         let diarizer = SpeakerDiarizer(store: store)
 
         // First call: a voice is heard and the user names it.
-        let (c1, s1) = chunk(pitch: 150)
+        let (c1, s1) = chunk(pitch: 150, seconds: 2.5)
         let first = await diarizer.label(for: s1, in: c1)
         let id = try XCTUnwrap(first?.id)
         try store.renameSpeaker(id: id, to: "Alice")
 
         // Second call (fresh diarizer, same store): the same voice is recognized.
         let diarizer2 = SpeakerDiarizer(store: store)
-        await diarizer2.reset()
-        let (c2, s2) = chunk(pitch: 151)
+        await diarizer2.beginCall()
+        let (c2, s2) = chunk(pitch: 151, seconds: 2.5)
         let second = await diarizer2.label(for: s2, in: c2)
         XCTAssertEqual(second?.id, id, "Same voice should match its stored fingerprint")
         XCTAssertEqual(second?.label, "Alice", "The assigned name should carry across calls")

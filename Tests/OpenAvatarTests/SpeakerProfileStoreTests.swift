@@ -153,6 +153,39 @@ final class SpeakerProfileStoreTests: XCTestCase {
         XCTAssertEqual(fresh.embedding, kept.embedding)   // inherits the centroid
     }
 
+    func testSweepFoldsStraysIntoNearestSubstantialVoice() throws {
+        // The "1:1 call shows 6 speakers" cleanup: unnamed voices with almost
+        // no utterances fold into their nearest named/substantial voice when
+        // the fingerprints are close; genuinely different voices survive.
+        let store = try ContextStore(inMemory: true)
+        let now = Date()
+        let ben = UUID(), nearBen = UUID(), distinct = UUID()
+        try store.insertSpeakerProfile(SpeakerProfile(
+            id: ben, name: "Ben", ordinal: 1, embedding: [1, 0, 0],
+            sampleCount: 1000, createdAt: now, updatedAt: now))
+        try store.insertSpeakerProfile(SpeakerProfile(
+            id: nearBen, name: nil, ordinal: 2, embedding: [0.97, 0.24, 0],  // cos ≈ 0.97
+            sampleCount: 1, createdAt: now, updatedAt: now))
+        try store.insertSpeakerProfile(SpeakerProfile(
+            id: distinct, name: nil, ordinal: 3, embedding: [0, 1, 0],       // cos = 0
+            sampleCount: 2, createdAt: now, updatedAt: now))
+
+        let callID = try store.startCall(app: "Zoom")
+        try store.insert([
+            TranscriptSegment(text: "brb", t0: 0, t1: 1, source: .system, confidence: 0.9,
+                              speaker: "Speaker 2", speakerID: nearBen.uuidString)
+        ], callID: callID)
+
+        XCTAssertEqual(try store.sweepStrayProfiles(), 1)
+
+        let remaining = try store.allSpeakerProfiles()
+        XCTAssertEqual(Set(remaining.map(\.id)), [ben, distinct])
+        // The stray's segment now belongs to Ben, relabeled.
+        XCTAssertEqual(try store.segments(callID: callID).first?.speaker, "Ben")
+        // Idempotent: nothing left close enough to fold.
+        XCTAssertEqual(try store.sweepStrayProfiles(), 0)
+    }
+
     func testDetachWithNoSegmentsOnCallIsANoOp() throws {
         let store = try ContextStore(inMemory: true)
         let now = Date()

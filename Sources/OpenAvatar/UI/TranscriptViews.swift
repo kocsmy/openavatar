@@ -296,6 +296,7 @@ struct TranscriptsSettingsTab: View {
     @State private var callSpeakers: [SpeakerProfile] = []
     @State private var allProfiles: [SpeakerProfile] = []
     @State private var speakersExpanded = true
+    @State private var tidyResult: String?
 
     private var selectedCall: ContextStore.CallRecord? {
         calls.first { $0.id == selectedCallID }
@@ -365,6 +366,23 @@ struct TranscriptsSettingsTab: View {
                                                               from: profile.id.uuidString)
                                         reload(callID: callID)
                                     })
+                            }
+                            HStack(spacing: 8) {
+                                Button {
+                                    let folded = app.sweepStrayVoices()
+                                    tidyResult = folded > 0
+                                        ? "Folded \(folded) stray voice\(folded == 1 ? "" : "s") away."
+                                        : "No stray voices close enough to fold."
+                                    reload(callID: callID)
+                                } label: {
+                                    Label("Tidy up stray voices", systemImage: "wand.and.stars")
+                                }
+                                .controlSize(.small)
+                                .disabled(app.isListening)
+                                .help("Fold unnamed voices with almost no utterances into their closest matching voice — across all calls")
+                                if let tidyResult {
+                                    Text(tidyResult).font(.caption2).foregroundStyle(.secondary)
+                                }
                             }
                             Text("Names are auto-detected from the conversation when possible — fix or clear any guess. Merging folds a duplicate voice into another, across all calls. \"Not them\" splits this call's voice out to a new speaker when someone was matched to the wrong person.")
                                 .font(.caption2).foregroundStyle(.tertiary)

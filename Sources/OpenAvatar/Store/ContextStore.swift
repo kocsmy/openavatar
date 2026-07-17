@@ -458,6 +458,39 @@ final class ContextStore: @unchecked Sendable {
         }
     }
 
+    /// One-shot cleanup of accumulated over-splitting: every unnamed voice
+    /// with at most `maxSamples` utterances folds into its acoustically
+    /// nearest named-or-substantial voice, provided the fingerprints are
+    /// close. Backfills calls recorded before end-of-call consolidation
+    /// existed. Returns the number of voices folded away.
+    func sweepStrayProfiles(maxSamples: Int = 3, threshold: Float = 0.75) throws -> Int {
+        let profiles = try allSpeakerProfiles()
+        let targets = profiles.filter { $0.isNamed || $0.sampleCount > maxSamples }
+        guard !targets.isEmpty else { return 0 }
+        var merged = 0
+        for stray in profiles where !stray.isNamed && stray.sampleCount <= maxSamples {
+            var best: SpeakerProfile?
+            var bestSim: Float = -1
+            for target in targets where target.id != stray.id {
+                let sim = Self.cosine(stray.embedding, target.embedding)
+                if sim > bestSim { bestSim = sim; best = target }
+            }
+            if let best, bestSim >= threshold {
+                try mergeSpeaker(stray.id, into: best.id)
+                merged += 1
+            }
+        }
+        return merged
+    }
+
+    static func cosine(_ a: [Float], _ b: [Float]) -> Float {
+        guard a.count == b.count, !a.isEmpty else { return -1 }
+        var dot: Float = 0, na: Float = 0, nb: Float = 0
+        for i in 0..<a.count { dot += a[i] * b[i]; na += a[i] * a[i]; nb += b[i] * b[i] }
+        let denom = (na.squareRoot() * nb.squareRoot())
+        return denom > 0 ? dot / denom : 0
+    }
+
     /// Break ONE call's voice out of a profile it was wrongly matched to —
     /// the inverse of merge. The call's segments move to a brand-new unnamed
     /// "Speaker N" profile (rename it afterwards); the source profile keeps its
