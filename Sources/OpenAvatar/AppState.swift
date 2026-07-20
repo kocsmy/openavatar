@@ -116,13 +116,38 @@ final class AppState: ObservableObject {
     private let callDetector = CallDetector()
 
     private init() {
-        // Suggest (never auto-start) capture when a known call app is running.
+        // Every 20s: while idle, suggest (never auto-start) capture when an
+        // app actually holds the microphone — a real call signal. While
+        // listening, keep the saved call's app label honest: the right app is
+        // only knowable mid-call (mic ownership), and the calendar event that
+        // names a browser call ("Google Meet") may arrive after start.
         callDetectorTimer = Timer.scheduledTimer(withTimeInterval: 20, repeats: true) { [weak self] _ in
             Task { @MainActor in
-                guard let self, !self.isListening else { return }
-                self.suggestedCallApp = self.callDetector.detectRunningCallApp()?.appName
+                guard let self else { return }
+                if self.isListening {
+                    self.refreshCallAppLabel()
+                } else {
+                    self.suggestedCallApp = self.callDetector
+                        .detectActiveCall(conferenceService: self.currentEvent?.conferenceService)?
+                        .appName
+                }
             }
         }
+    }
+
+    /// Current best label for the app hosting this call (persisted on the record).
+    private var currentCallAppLabel: String?
+
+    /// Re-detect who owns the mic and update the call record when it changes
+    /// — e.g. Slack was guessed at start but Zoom turns out to host the call,
+    /// or the calendar event now identifies the browser call as Google Meet.
+    private func refreshCallAppLabel() {
+        guard let callID = currentCallID, isListening else { return }
+        guard let detected = callDetector.detectActiveCall(
+            conferenceService: currentEvent?.conferenceService) else { return }
+        guard detected.appName != currentCallAppLabel else { return }
+        currentCallAppLabel = detected.appName
+        try? store.updateCallApp(callID, app: detected.appName)
     }
 
     // MARK: - Listening lifecycle (spec §4.1: icon always reflects state)
@@ -135,7 +160,12 @@ final class AppState: ObservableObject {
         pendingFollowUps = []
         assignedAttendeeEmails = []
         do {
-            let callID = try store.startCall(app: suggestedCallApp)
+            // Label with whoever holds the mic right now; fall back to the
+            // banner's suggestion. Refined again mid-call (refreshCallAppLabel).
+            let detected = callDetector.detectActiveCall(
+                conferenceService: currentEvent?.conferenceService)?.appName
+            currentCallAppLabel = detected ?? suggestedCallApp
+            let callID = try store.startCall(app: currentCallAppLabel)
             currentCallID = callID
             currentCallStartedAt = Date()
             let service = AudioCaptureService { [weak self] chunk in
@@ -183,6 +213,7 @@ final class AppState: ObservableObject {
         capture?.stop()
         capture = nil
         isListening = false
+        systemAudioActive = false
 
         let callID = currentCallID
         let callStart = currentCallStartedAt
@@ -395,7 +426,10 @@ final class AppState: ObservableObject {
 
     private func handle(chunk: AudioChunk) {
         guard let callID = currentCallID else { return }
-        if chunk.source == .system { systemAudioActive = true }
+        if chunk.source == .system, !systemAudioActive {
+            systemAudioActive = true
+            refreshCallAppLabel()   // call is audibly underway — correct the label early
+        }
         Task {
             do {
                 let transcriber = makeTranscriber()

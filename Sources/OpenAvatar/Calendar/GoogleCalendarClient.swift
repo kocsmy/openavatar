@@ -26,6 +26,9 @@ struct CalendarEvent: Sendable, Equatable {
     let start: Date?
     let end: Date?
     let attendees: [CalendarAttendee]
+    /// Conferencing service of the event ("Google Meet", "Zoom", …) when the
+    /// event carries a meeting link — used to label browser-hosted calls.
+    var conferenceService: String? = nil
 
     /// Everyone except the account owner — the people on the other end.
     func others(excludingSelfEmail selfEmail: String) -> [CalendarAttendee] {
@@ -89,7 +92,36 @@ struct GoogleCalendarClient: Sendable {
                 isSelf: a["self"]?.boolValue ?? false,
                 isOrganizer: a["organizer"]?.boolValue ?? false)
         }
-        return CalendarEvent(id: id, title: title, start: start, end: end, attendees: attendees)
+        return CalendarEvent(id: id, title: title, start: start, end: end,
+                             attendees: attendees,
+                             conferenceService: conferenceService(of: item))
+    }
+
+    /// Names the event's conferencing service. Google events state it
+    /// explicitly (conferenceSolution.name, e.g. "Google Meet"); otherwise
+    /// sniff well-known meeting domains from the link, location, or notes.
+    static func conferenceService(of item: JSONValue) -> String? {
+        if let solution = item["conferenceData"]?["conferenceSolution"]?["name"]?.stringValue,
+           !solution.isEmpty {
+            return solution
+        }
+        var haystack = [item["hangoutLink"]?.stringValue,
+                        item["location"]?.stringValue,
+                        item["description"]?.stringValue]
+            .compactMap { $0 }.joined(separator: " ").lowercased()
+        for entry in item["conferenceData"]?["entryPoints"]?.arrayValue ?? [] {
+            haystack += " " + (entry["uri"]?.stringValue ?? "").lowercased()
+        }
+        let domains: [(String, String)] = [
+            ("meet.google.com", "Google Meet"),
+            ("zoom.us", "Zoom"),
+            ("teams.microsoft.com", "Microsoft Teams"),
+            ("teams.live.com", "Microsoft Teams"),
+            ("webex.com", "Webex"),
+            ("whereby.com", "Whereby"),
+            ("around.co", "Around")
+        ]
+        return domains.first { haystack.contains($0.0) }?.1
     }
 
     private static func date(from node: JSONValue?, iso: ISO8601DateFormatter) -> Date? {
