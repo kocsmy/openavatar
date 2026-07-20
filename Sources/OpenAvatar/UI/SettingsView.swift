@@ -88,6 +88,7 @@ struct GeneralSettingsTab: View {
 
 struct TranscriptionSettingsTab: View {
     @EnvironmentObject var settings: SettingsStore
+    @EnvironmentObject var app: AppState
     @StateObject private var whisperSetup = WhisperSetupService()
     @State private var sttKey = ""
     @State private var sttKeySaved = KeychainStore.shared.get(.cloudSTTAPIKey) != nil
@@ -100,35 +101,25 @@ struct TranscriptionSettingsTab: View {
                     ForEach(TranscriptionMode.allCases, id: \.self) { Text($0.displayName).tag($0) }
                 }
                 .pickerStyle(.radioGroup)
-                if settings.transcriptionMode == .cloud {
+                switch settings.transcriptionMode {
+                case .local:
+                    Text("whisper.cpp on your Mac — private and fully offline. The widest language coverage (99); pick the model quality below.")
+                        .font(.caption).foregroundStyle(.secondary)
+                case .parakeet:
+                    Text("NVIDIA Parakeet on the Apple Neural Engine — also fully on-device and offline, several times faster than Whisper and more accurate for its 25 languages (English, Hungarian, most European languages, Japanese).")
+                        .font(.caption).foregroundStyle(.secondary)
+                case .cloud:
                     Label("Call audio will be sent to the configured cloud provider.",
                           systemImage: "exclamationmark.triangle")
                         .font(.caption)
                         .foregroundStyle(.orange)
                 }
             }
-            Section("Language") {
-                Picker("Spoken language", selection: $settings.transcriptionLanguage) {
-                    ForEach(TranscriptionLanguage.options, id: \.code) { option in
-                        Text(option.label).tag(option.code)
-                    }
-                }
-                Text("Auto-detect handles multilingual calls (e.g. mixing Hungarian and English). Local mode needs the multilingual model — the auto-setup below installs it.")
-                    .font(.caption).foregroundStyle(.secondary)
-            }
-            Section("Speakers") {
-                Toggle("Distinguish individual speakers", isOn: $settings.diarizationEnabled)
-                Text("On-device per-voice diarization labels each participant on the call (Speaker 1, Speaker 2…) — your own mic is always \"You\". Works fully offline; best with a few clearly-distinct voices.")
-                    .font(.caption).foregroundStyle(.secondary)
-            }
-            Section("Custom vocabulary") {
-                TextField("Names & jargon, comma-separated (e.g. PostHog, Termly, Linear)",
-                          text: $settings.customVocabulary)
-                Text("Transcription is biased toward spelling these correctly. Speaker names and calendar attendees are added automatically on each call.")
-                    .font(.caption).foregroundStyle(.secondary)
-            }
-            if settings.transcriptionMode == .local {
-                Section("Local transcription (whisper.cpp)") {
+
+            // Engine-specific setup, directly under the choice that needs it.
+            switch settings.transcriptionMode {
+            case .local:
+                Section("Whisper setup") {
                     WhisperSetupView(service: whisperSetup)
                     WhisperModelPickerView(service: whisperSetup)
                     DisclosureGroup("Advanced: paths", isExpanded: $showAdvanced) {
@@ -136,7 +127,9 @@ struct TranscriptionSettingsTab: View {
                         TextField("Model path (.bin)", text: $settings.whisperModelPath)
                     }
                 }
-            } else {
+            case .parakeet:
+                Section("Parakeet setup") { parakeetSetup }
+            case .cloud:
                 Section("Cloud STT (OpenAI-compatible, BYO key)") {
                     TextField("Base URL", text: $settings.cloudSTTBaseURL)
                     TextField("Model", text: $settings.cloudSTTModel)
@@ -147,9 +140,64 @@ struct TranscriptionSettingsTab: View {
                         .font(.caption).foregroundStyle(.secondary)
                 }
             }
+
+            // Language + vocabulary apply to Whisper/cloud. Parakeet detects
+            // language automatically and takes no vocabulary hints.
+            if settings.transcriptionMode != .parakeet {
+                Section("Language") {
+                    Picker("Spoken language", selection: $settings.transcriptionLanguage) {
+                        ForEach(TranscriptionLanguage.options, id: \.code) { option in
+                            Text(option.label).tag(option.code)
+                        }
+                    }
+                    Text("Auto-detect handles multilingual calls (e.g. mixing Hungarian and English). Local mode needs the multilingual model — the auto-setup above installs it.")
+                        .font(.caption).foregroundStyle(.secondary)
+                }
+                Section("Custom vocabulary") {
+                    TextField("Names & jargon, comma-separated (e.g. PostHog, Termly, Linear)",
+                              text: $settings.customVocabulary)
+                    Text("Transcription is biased toward spelling these correctly. Speaker names and calendar attendees are added automatically on each call.")
+                        .font(.caption).foregroundStyle(.secondary)
+                }
+            }
+
+            Section("Speakers") {
+                Toggle("Distinguish individual speakers", isOn: $settings.diarizationEnabled)
+                Text("On-device per-voice diarization labels each participant on the call (Speaker 1, Speaker 2…) — your own mic is always \"You\". Works fully offline; best with a few clearly-distinct voices.")
+                    .font(.caption).foregroundStyle(.secondary)
+            }
         }
         .formStyle(.grouped)
         .padding()
+        .onAppear { app.refreshParakeetState() }
+    }
+
+    @ViewBuilder private var parakeetSetup: some View {
+        switch app.parakeetState {
+        case .ready:
+            Label("Parakeet is ready — transcribing on the Neural Engine, fully offline.",
+                  systemImage: "checkmark.circle.fill")
+                .font(.callout).foregroundStyle(.green)
+        case .preparing:
+            Label { Text("Downloading & loading models (~600 MB, one-time)…") }
+                icon: { ProgressView().controlSize(.small) }
+                .font(.caption)
+        case .failed(let message):
+            Label(message, systemImage: "xmark.circle.fill")
+                .font(.caption).foregroundStyle(.red)
+                .textSelection(.enabled)
+            Button("Retry") { app.prepareParakeet() }
+                .controlSize(.small)
+        case .idle:
+            HStack(spacing: 10) {
+                Button("Download & prepare") { app.prepareParakeet() }
+                    .buttonStyle(.borderedProminent)
+                Text("~600 MB, one-time — stored on this Mac; everything runs offline afterwards. Already downloaded? This just loads it.")
+                    .font(.caption).foregroundStyle(.secondary)
+            }
+        }
+        Text("Language is detected automatically among Parakeet's 25. For calls in languages outside that set, switch to Whisper — it covers 99.")
+            .font(.caption).foregroundStyle(.secondary)
     }
 }
 
