@@ -16,6 +16,11 @@ actor ParakeetTranscriber: Transcriber {
     static let shared = ParakeetTranscriber()
 
     private var manager: AsrManager?
+    /// Streaming decoder state per audio channel — it carries linguistic
+    /// context (last token, LSTM state) across chunk boundaries, so keeping
+    /// one per source means the mic and system streams don't corrupt each
+    /// other's context.
+    private var decoderStates: [AudioSource: TdtDecoderState] = [:]
 
     var isReady: Bool { manager != nil }
 
@@ -27,6 +32,7 @@ actor ParakeetTranscriber: Transcriber {
         let asr = AsrManager(config: .default)
         try await asr.loadModels(models)
         manager = asr
+        decoderStates = [:]
     }
 
     func transcribe(_ chunk: AudioChunk) async throws -> [TranscriptSegment] {
@@ -37,8 +43,11 @@ actor ParakeetTranscriber: Transcriber {
         let samples = Self.floatSamples(fromPCM: chunk.pcm)
         guard !samples.isEmpty else { return [] }
 
-        let result = try await manager.transcribe(samples)
-        let text = result.text.trimmingCharacters(in: .whitespacesAndNewlines)
+        var state = try decoderStates[chunk.source] ?? TdtDecoderState()
+        let result = try await manager.transcribe(samples, decoderState: &state)
+        decoderStates[chunk.source] = state
+
+        let text = result.text.trimmingCharacters(in: CharacterSet.whitespacesAndNewlines)
         guard !text.isEmpty, !WhisperLocalTranscriber.isNoise(text) else { return [] }
         return [TranscriptSegment(text: text, t0: chunk.t0, t1: chunk.t1,
                                   source: chunk.source, confidence: 0.9)]
