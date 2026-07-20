@@ -475,32 +475,30 @@ final class ContextStore: @unchecked Sendable {
     /// nearest named-or-substantial voice, provided the fingerprints are
     /// close. Backfills calls recorded before end-of-call consolidation
     /// existed. Returns the number of voices folded away.
-    func sweepStrayProfiles(maxSamples: Int = 3, threshold: Float = 0.75) throws -> Int {
+    ///
+    /// The fold bar depends on the fingerprint's vector space (dimension):
+    /// neural 256-dim embeddings separate speakers around 0.7 cosine
+    /// distance; legacy spectral ones around 0.16. Mismatched dimensions are
+    /// infinitely far apart, so legacy and neural profiles never cross-merge.
+    func sweepStrayProfiles(maxSamples: Int = 3) throws -> Int {
         let profiles = try allSpeakerProfiles()
         let targets = profiles.filter { $0.isNamed || $0.sampleCount > maxSamples }
         guard !targets.isEmpty else { return 0 }
         var merged = 0
         for stray in profiles where !stray.isNamed && stray.sampleCount <= maxSamples {
             var best: SpeakerProfile?
-            var bestSim: Float = -1
+            var bestDist: Float = .greatestFiniteMagnitude
             for target in targets where target.id != stray.id {
-                let sim = Self.cosine(stray.embedding, target.embedding)
-                if sim > bestSim { bestSim = sim; best = target }
+                let dist = voiceCosineDistance(stray.embedding, target.embedding)
+                if dist < bestDist { bestDist = dist; best = target }
             }
-            if let best, bestSim >= threshold {
+            let foldBar: Float = stray.embedding.count >= 100 ? 0.80 : 0.25
+            if let best, bestDist <= foldBar {
                 try mergeSpeaker(stray.id, into: best.id)
                 merged += 1
             }
         }
         return merged
-    }
-
-    static func cosine(_ a: [Float], _ b: [Float]) -> Float {
-        guard a.count == b.count, !a.isEmpty else { return -1 }
-        var dot: Float = 0, na: Float = 0, nb: Float = 0
-        for i in 0..<a.count { dot += a[i] * b[i]; na += a[i] * a[i]; nb += b[i] * b[i] }
-        let denom = (na.squareRoot() * nb.squareRoot())
-        return denom > 0 ? dot / denom : 0
     }
 
     /// Break ONE call's voice out of a profile it was wrongly matched to —

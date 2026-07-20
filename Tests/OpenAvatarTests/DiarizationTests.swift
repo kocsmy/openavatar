@@ -28,8 +28,10 @@ final class DiarizationTests: XCTestCase {
 
     private func makeDiarizer() -> SpeakerDiarizer {
         // Isolated in-memory store so fingerprints don't leak between tests.
+        // The spectral embedder keeps tests deterministic and offline — the
+        // neural one would download CoreML models in CI.
         let store = try! ContextStore(inMemory: true)
-        return SpeakerDiarizer(store: store)
+        return SpeakerDiarizer(store: store, embedderFactory: { SpectralVoiceEmbedder() })
     }
 
     func testMicChannelNeverDiarized() async {
@@ -98,7 +100,8 @@ final class DiarizationTests: XCTestCase {
     /// A named voice keeps its name when it reappears in a later call.
     func testNamePersistsAcrossCalls() async throws {
         let store = try ContextStore(inMemory: true)
-        let diarizer = SpeakerDiarizer(store: store)
+        let diarizer = SpeakerDiarizer(store: store,
+                                       embedderFactory: { SpectralVoiceEmbedder() })
 
         // First call: a voice is heard and the user names it.
         let (c1, s1) = chunk(pitch: 150, seconds: 2.5)
@@ -107,7 +110,8 @@ final class DiarizationTests: XCTestCase {
         try store.renameSpeaker(id: id, to: "Alice")
 
         // Second call (fresh diarizer, same store): the same voice is recognized.
-        let diarizer2 = SpeakerDiarizer(store: store)
+        let diarizer2 = SpeakerDiarizer(store: store,
+                                        embedderFactory: { SpectralVoiceEmbedder() })
         await diarizer2.beginCall()
         let (c2, s2) = chunk(pitch: 151, seconds: 2.5)
         let second = await diarizer2.label(for: s2, in: c2)
