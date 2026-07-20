@@ -301,6 +301,15 @@ final class ContextStore: @unchecked Sendable {
         }
     }
 
+    /// Relabel which app hosted a call — detection can only be certain once
+    /// the call is underway (mic ownership), which may postdate startCall.
+    func updateCallApp(_ callID: UUID, app: String) throws {
+        try dbQueue.write { db in
+            try db.execute(sql: "UPDATE calls SET app = ? WHERE id = ?",
+                           arguments: [app, callID.uuidString])
+        }
+    }
+
     /// Remove segments that turned out to be chunk-overlap duplicates of a
     /// newer, fuller decode (see TranscriptSanitizer).
     func deleteSegments(_ ids: [UUID]) throws {
