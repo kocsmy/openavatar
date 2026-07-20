@@ -55,6 +55,40 @@ final class AppState: ObservableObject {
     /// Emails already auto-assigned to a voice this call (prevents re-prefill).
     private var assignedAttendeeEmails: Set<String> = []
 
+    /// Parakeet (FluidAudio) model preparation, for the settings UI.
+    enum ParakeetState {
+        case idle, preparing, ready
+        case failed(String)
+    }
+    @Published var parakeetState: ParakeetState = .idle
+
+    /// Download (first time, ~600 MB) and load the Parakeet models, then make
+    /// Parakeet the active engine. Safe to re-run; reflects progress in
+    /// `parakeetState`.
+    func prepareParakeet() {
+        if case .preparing = parakeetState { return }
+        parakeetState = .preparing
+        Task {
+            do {
+                try await ParakeetTranscriber.shared.prepare()
+                parakeetState = .ready
+                settings.transcriptionMode = .parakeet
+            } catch {
+                parakeetState = .failed(Redactor.redact(error.localizedDescription))
+            }
+        }
+    }
+
+    /// Sync `parakeetState` with reality when the settings tab appears (models
+    /// may already be loaded from an earlier call this session).
+    func refreshParakeetState() {
+        Task {
+            if await ParakeetTranscriber.shared.isReady {
+                parakeetState = .ready
+            }
+        }
+    }
+
     let settings = SettingsStore.shared
     let store = ContextStore.shared
 
@@ -542,6 +576,8 @@ final class AppState: ObservableObject {
                                            modelPath: settings.whisperModelPath,
                                            language: settings.transcriptionLanguage,
                                            prompt: prompt)
+        case .parakeet:
+            return ParakeetTranscriber.shared   // long-lived: models load once
         case .cloud:
             let key = KeychainStore.shared.get(.cloudSTTAPIKey) ?? ""
             return CloudTranscriber(apiKey: key,

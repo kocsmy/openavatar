@@ -246,6 +246,17 @@ private struct TranscriptionStep: View {
                         WhisperSetupView(service: whisperSetup)
                             .padding(6)
                     }
+                } else if settings.transcriptionMode == .parakeet {
+                    GroupBox {
+                        Label {
+                            Text("Fully on-device, like Whisper — ~600 MB of neural models download automatically on your first call (or from Settings → Transcription). Fastest and most accurate for English, Hungarian, and 23 more languages.")
+                                .font(.callout)
+                        } icon: {
+                            Image(systemName: "cpu")
+                                .foregroundStyle(Color.accentColor)
+                        }
+                        .padding(6)
+                    }
                 } else {
                     GroupBox {
                         VStack(alignment: .leading, spacing: 6) {

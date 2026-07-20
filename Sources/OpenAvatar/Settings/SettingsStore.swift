@@ -2,11 +2,16 @@ import Foundation
 import Combine
 
 enum TranscriptionMode: String, Codable, CaseIterable {
-    case local  // whisper.cpp — private, offline (default)
-    case cloud  // BYO-key OpenAI-compatible STT
+    case local     // whisper.cpp — private, offline (default)
+    case parakeet  // NVIDIA Parakeet via FluidAudio — neural engine, offline
+    case cloud     // BYO-key OpenAI-compatible STT
 
     var displayName: String {
-        self == .local ? "Local (private, offline)" : "Cloud (BYO key)"
+        switch self {
+        case .local: return "Whisper (offline, 99 languages)"
+        case .parakeet: return "Parakeet (offline, fastest — 25 languages)"
+        case .cloud: return "Cloud (BYO key)"
+        }
     }
 }
 
