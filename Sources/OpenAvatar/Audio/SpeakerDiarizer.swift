@@ -12,43 +12,18 @@ struct DiarizedSpeaker: Sendable, Equatable {
 
 /// On-device per-voice diarization for the system-audio ("Others") channel.
 ///
-/// Approach — no ML model, no network: derive a compact acoustic embedding
-/// per utterance from its audio (log-mel spectral envelope + median pitch),
-/// then match it against persistent voice fingerprints by cosine similarity.
-/// A matched voice reuses its stored profile (and its user-assigned name);
-/// an unseen voice creates a new profile. Because profiles are persisted, a
-/// name given to a voice carries across every past and future call. The mic
-/// channel is always "You" and never diarized.
-///
-/// This is a genuine attempt, not production-grade diarization: it separates a
-/// handful of clearly-distinct voices well, but can merge similar voices or
-/// split one speaker across very different acoustic conditions.
+/// Each utterance's audio becomes a voice embedding (neural WeSpeaker
+/// vectors via FluidAudio in production — see VoiceEmbedder) and is matched
+/// against persistent voice fingerprints by cosine distance. A matched voice
+/// reuses its stored profile (and its user-assigned name); an unseen voice
+/// creates a new profile. Because profiles are persisted, a name given to a
+/// voice carries across every past and future call. The mic channel is
+/// always "You" and never diarized.
 actor SpeakerDiarizer {
-    /// Cosine similarity above which an utterance joins an existing speaker.
-    /// Deliberately fairly strict: merging two *different* voices into one is the
-    /// worse, unfixable-in-place error, whereas over-splitting one voice into a
-    /// few "Speaker N" entries is easily corrected with Merge. Higher = stricter.
-    private let joinThreshold: Float = 0.84
-    /// Joining a profile that carries a NAME is held to a stricter bar still:
-    /// showing a new person under someone else's name is the most jarring
-    /// mistake this system can make. A borderline voice becomes "Speaker N"
-    /// instead, which the user can rename or merge.
-    private let namedJoinThreshold: Float = 0.88
-    /// A voice already heard on THIS call rejoins at a friendlier bar: within
-    /// one call the same person drifts (level, distance, codec artifacts) far
-    /// more than two different people sound alike. Without this, every dip
-    /// below the join bar minted another permanent "Speaker N".
-    private let activeRejoinThreshold: Float = 0.78
-    /// A short, otherwise-unmatched utterance sticks with the previous speaker
-    /// when at least this similar, instead of becoming a stray.
-    private let continuityFloor: Float = 0.70
     /// Utterances shorter than this may MATCH a voice but never mint a new
     /// profile — sub-2s clips give unreliable embeddings, and one-utterance
     /// "Speaker N" strays were the main fingerprinting complaint.
     private let minSamplesForNewProfile = 16_000 * 2   // 2 s at 16 kHz
-    /// End-of-call cleanup bars (see consolidateCall).
-    private let strayFoldThreshold: Float = 0.75
-    private let namedAdoptThreshold: Float = 0.86
     /// Utterances quieter/shorter than these are left as "Others".
     private let minSamples = 16_000 / 4        // 0.25 s at 16 kHz
     private let minRMS: Float = 0.006
@@ -57,24 +32,44 @@ actor SpeakerDiarizer {
     /// Working set of known voice fingerprints, loaded from the store.
     private var profiles: [SpeakerProfile] = []
     private var loaded = false
-    private let extractor = EmbeddingExtractor()
+
+    /// The embedding backend — neural (FluidAudio) in the app, spectral in
+    /// tests. Created lazily inside the actor; all matching thresholds come
+    /// from it, since they're only meaningful in its vector space.
+    private let embedderFactory: @Sendable () -> VoiceEmbedder
+    private lazy var embedder: VoiceEmbedder = embedderFactory()
 
     // Per-call working state (cleared by beginCall).
     private var utterancesThisCall: [UUID: Int] = [:]
     private var createdThisCall: Set<UUID> = []
     private var lastSpeakerID: UUID?
 
-    init(store: ContextStore = .shared) {
+    init(store: ContextStore = .shared,
+         embedderFactory: @escaping @Sendable () -> VoiceEmbedder = { NeuralVoiceEmbedder() }) {
         self.store = store
+        self.embedderFactory = embedderFactory
     }
 
-    /// Start of a call: reload persisted fingerprints and forget the previous
-    /// call's working state.
+    /// Start of a call: reload persisted fingerprints, forget the previous
+    /// call's working state, and warm up the embedding models in the
+    /// background (first-ever call downloads them; until they're ready,
+    /// segments stay "Others" rather than blocking transcription).
     func beginCall() {
         reset()
         utterancesThisCall = [:]
         createdThisCall = []
         lastSpeakerID = nil
+        Task { await prepareEmbedder() }
+    }
+
+    private func prepareEmbedder() async {
+        guard !embedder.isReady else { return }
+        do {
+            try await embedder.prepare()
+        } catch {
+            NSLog("Voice fingerprinting models unavailable: %@",
+                  Redactor.redact(error.localizedDescription))
+        }
     }
 
     /// Reload persisted fingerprints (after a rename/merge/detach) WITHOUT
@@ -90,16 +85,17 @@ actor SpeakerDiarizer {
     func label(for segment: TranscriptSegment, in chunk: AudioChunk) -> DiarizedSpeaker? {
         guard segment.source == .system else { return nil }
         if !loaded { reset() }
+        guard embedder.isReady else { return nil }   // models still downloading
         let samples = pcmSlice(chunk: chunk, t0: segment.t0, t1: segment.t1)
-        guard samples.count >= minSamples else { return nil }
-        guard let embedding = extractor.embedding(samples), rms(samples) >= minRMS else { return nil }
+        guard samples.count >= minSamples, rms(samples) >= minRMS,
+              let embedding = embedder.embedding(for: samples) else { return nil }
 
-        // Nearest known voice by cosine similarity.
+        // Nearest known voice by cosine distance (lower = closer).
         var bestIndex = -1
-        var bestSim: Float = -1
+        var bestDist: Float = .greatestFiniteMagnitude
         for (i, profile) in profiles.enumerated() {
-            let sim = cosine(embedding, profile.embedding)
-            if sim > bestSim { bestSim = sim; bestIndex = i }
+            let dist = voiceCosineDistance(embedding, profile.embedding)
+            if dist < bestDist { bestDist = dist; bestIndex = i }
         }
 
         if bestIndex >= 0 {
@@ -107,15 +103,15 @@ actor SpeakerDiarizer {
             // (2+ utterances — a single-utterance voice doesn't get to capture
             // the next speaker), strictest for a NAMED voice not heard yet.
             let best = profiles[bestIndex]
-            let required: Float
+            let allowed: Float
             if utterancesThisCall[best.id, default: 0] >= 2 {
-                required = activeRejoinThreshold
+                allowed = embedder.activeRejoinDistance
             } else if best.name != nil {
-                required = namedJoinThreshold
+                allowed = embedder.namedJoinDistance
             } else {
-                required = joinThreshold
+                allowed = embedder.joinDistance
             }
-            if bestSim >= required {
+            if bestDist <= allowed {
                 // Update the running-average centroid and persist it.
                 var p = best
                 let n = Float(p.sampleCount)
@@ -140,7 +136,7 @@ actor SpeakerDiarizer {
         if samples.count < minSamplesForNewProfile {
             if let last = lastSpeakerID,
                let lastProfile = profiles.first(where: { $0.id == last }),
-               cosine(embedding, lastProfile.embedding) >= continuityFloor {
+               voiceCosineDistance(embedding, lastProfile.embedding) <= embedder.continuityDistance {
                 // No centroid update: weak evidence shouldn't shape the voice.
                 utterancesThisCall[last, default: 0] += 1
                 return DiarizedSpeaker(id: last, label: lastProfile.displayLabel)
@@ -181,7 +177,7 @@ actor SpeakerDiarizer {
         for (id, count) in utterancesThisCall
         where id != dominant.id && createdThisCall.contains(id) && count < 3 {
             guard let stray = profiles.first(where: { $0.id == id }), stray.name == nil,
-                  cosine(stray.embedding, dominant.embedding) >= strayFoldThreshold
+                  voiceCosineDistance(stray.embedding, dominant.embedding) <= embedder.strayFoldDistance
             else { continue }
             try? store.mergeSpeaker(id, into: dominant.id)
             merges.append((id, dominant.id))
@@ -189,12 +185,12 @@ actor SpeakerDiarizer {
 
         if createdThisCall.contains(dominant.id), dominant.name == nil {
             var bestNamed: SpeakerProfile?
-            var bestSim: Float = -1
+            var bestDist: Float = .greatestFiniteMagnitude
             for p in profiles where p.name != nil && p.id != dominant.id {
-                let sim = cosine(dominant.embedding, p.embedding)
-                if sim > bestSim { bestSim = sim; bestNamed = p }
+                let dist = voiceCosineDistance(dominant.embedding, p.embedding)
+                if dist < bestDist { bestDist = dist; bestNamed = p }
             }
-            if let named = bestNamed, bestSim >= namedAdoptThreshold {
+            if let named = bestNamed, bestDist <= embedder.namedAdoptDistance {
                 try? store.mergeSpeaker(dominant.id, into: named.id)
                 merges.append((dominant.id, named.id))
             }
@@ -237,13 +233,6 @@ actor SpeakerDiarizer {
         return (sum / Float(x.count)).squareRoot()
     }
 
-    private func cosine(_ a: [Float], _ b: [Float]) -> Float {
-        guard a.count == b.count else { return -1 }
-        var dot: Float = 0, na: Float = 0, nb: Float = 0
-        for i in 0..<a.count { dot += a[i] * b[i]; na += a[i] * a[i]; nb += b[i] * b[i] }
-        let denom = (na.squareRoot() * nb.squareRoot())
-        return denom > 0 ? dot / denom : 0
-    }
 }
 
 /// Turns a mono 16 kHz float slice into a fixed-length speaker embedding:

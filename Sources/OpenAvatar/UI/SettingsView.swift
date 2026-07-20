@@ -163,7 +163,7 @@ struct TranscriptionSettingsTab: View {
 
             Section("Speakers") {
                 Toggle("Distinguish individual speakers", isOn: $settings.diarizationEnabled)
-                Text("On-device per-voice diarization labels each participant on the call (Speaker 1, Speaker 2…) — your own mic is always \"You\". Works fully offline; best with a few clearly-distinct voices.")
+                Text("Neural voice fingerprints (CoreML, on-device) label each participant on the call — your own mic is always \"You\". The models (~tens of MB) download automatically on your first call and run fully offline. Names you assign carry across calls.")
                     .font(.caption).foregroundStyle(.secondary)
             }
         }
