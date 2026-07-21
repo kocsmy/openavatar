@@ -24,6 +24,14 @@ actor ParakeetTranscriber: Transcriber {
 
     var isReady: Bool { manager != nil }
 
+    /// Whether the ~600 MB model download already happened on this Mac —
+    /// checked on disk, so the settings UI can show "ready" after an app
+    /// restart instead of offering the download again. (Loading the models
+    /// into memory still happens lazily on first use.)
+    static var modelsOnDisk: Bool {
+        AsrModels.modelsExist(at: AsrModels.defaultCacheDirectory(for: .v3), version: .v3)
+    }
+
     /// Download (first time) and load the models. Idempotent; concurrent
     /// callers wait on the actor.
     func prepare() async throws {

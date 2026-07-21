@@ -175,7 +175,7 @@ struct TranscriptionSettingsTab: View {
     @ViewBuilder private var parakeetSetup: some View {
         switch app.parakeetState {
         case .ready:
-            Label("Parakeet is ready — transcribing on the Neural Engine, fully offline.",
+            Label("Parakeet is ready to go — models are on this Mac; transcription runs on the Neural Engine, fully offline.",
                   systemImage: "checkmark.circle.fill")
                 .font(.callout).foregroundStyle(.green)
         case .preparing:
@@ -192,7 +192,7 @@ struct TranscriptionSettingsTab: View {
             HStack(spacing: 10) {
                 Button("Download & prepare") { app.prepareParakeet() }
                     .buttonStyle(.borderedProminent)
-                Text("~600 MB, one-time — stored on this Mac; everything runs offline afterwards. Already downloaded? This just loads it.")
+                Text("~600 MB, one-time — stored on this Mac; everything runs offline afterwards.")
                     .font(.caption).foregroundStyle(.secondary)
             }
         }
