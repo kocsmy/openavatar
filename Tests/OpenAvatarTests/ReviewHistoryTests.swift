@@ -23,9 +23,27 @@ final class ReviewHistoryTests: XCTestCase {
             decision("was edited+approved", callID: callID, status: .edited),
             decision("was dismissed", callID: callID, status: .dismissed),
             decision("was executed", callID: callID, status: .executed),
-            decision("was reverted", callID: callID, status: .reverted)
+            decision("was reverted", callID: callID, status: .reverted),
+            decision("was done by the user", callID: callID, status: .done)
         ]
         XCTAssertEqual(all.awaitingReview.map(\.summary), ["untouched"])
+    }
+
+    func testMarkedDoneRoundTripsAndStaysGone() throws {
+        // One-click "I did it myself": the item leaves the review permanently,
+        // with no dismiss reason (it was a correct detection, not a misfire).
+        let store = try ContextStore(inMemory: true)
+        let callID = try store.startCall(app: "Zoom")
+        let item = decision("send the email", callID: callID)
+        try store.insert(item)
+
+        try store.updateDecisionStatus(item.id, status: .done)
+
+        let reloaded = try store.decisions(callID: callID)
+        XCTAssertTrue(reloaded.awaitingReview.isEmpty)
+        let stored = try XCTUnwrap(reloaded.first { $0.id == item.id })
+        XCTAssertEqual(stored.status, .done)
+        XCTAssertNil(stored.dismissReason)
     }
 
     func testHandledItemsDoNotResurrectThroughTheStore() throws {

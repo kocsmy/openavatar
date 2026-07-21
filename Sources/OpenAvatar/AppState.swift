@@ -79,11 +79,13 @@ final class AppState: ObservableObject {
         }
     }
 
-    /// Sync `parakeetState` with reality when the settings tab appears (models
-    /// may already be loaded from an earlier call this session).
+    /// Sync `parakeetState` with reality when the settings tab appears: models
+    /// may already be loaded from an earlier call this session, or downloaded
+    /// on disk from a previous run — either way the user is ready to go and
+    /// must not be offered the 600 MB download again.
     func refreshParakeetState() {
         Task {
-            if await ParakeetTranscriber.shared.isReady {
+            if await ParakeetTranscriber.shared.isReady || ParakeetTranscriber.modelsOnDisk {
                 parakeetState = .ready
             }
         }
@@ -719,6 +721,15 @@ final class AppState: ObservableObject {
         detectedDecisions.removeAll { $0.id == decision.id }
         try? store.updateDecisionStatus(decision.id, status: .dismissed, dismissReason: reason)
         try? MetricsRecorder(store: store).bump("dismissed")
+    }
+
+    /// One-click "already did it myself": the item was detected correctly but
+    /// the user handled it outside the app — clear it without executing
+    /// anything and without logging a misfire.
+    func markDone(_ decision: Decision) {
+        pendingApprovals.removeAll { $0.decision.id == decision.id }
+        detectedDecisions.removeAll { $0.id == decision.id }
+        try? store.updateDecisionStatus(decision.id, status: .done)
     }
 
     private func runPlan(_ plan: ActionPlan, decision: Decision, edited: Bool) async throws {

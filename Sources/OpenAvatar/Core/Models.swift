@@ -60,6 +60,9 @@ enum DecisionIntent: String, Codable, CaseIterable, Sendable {
 
 enum DecisionStatus: String, Codable, Sendable {
     case detected, approved, edited, dismissed, executed, reverted
+    /// The user did it themselves, outside the app — correctly detected (so
+    /// not a dismissal/misfire), but nothing for the app to execute.
+    case done = "done_myself"
 }
 
 /// Reason picker used when dismissing (feeds the misfire log, PRD R2).
@@ -100,8 +103,8 @@ struct Decision: Codable, Identifiable, Sendable {
 
 extension Array where Element == Decision {
     /// Items still awaiting the user's decision. Everything else (approved,
-    /// edited, dismissed, executed, reverted) was already handled in a review
-    /// and must not resurrect when a past call's review is re-opened.
+    /// edited, dismissed, executed, reverted, done) was already handled in a
+    /// review and must not resurrect when a past call's review is re-opened.
     var awaitingReview: [Decision] { filter { $0.status == .detected } }
 }
 

@@ -264,6 +264,7 @@ struct PostCallReviewView: View {
         case .executed: return ("Executed", "bolt.circle.fill", .green)
         case .dismissed: return ("Dismissed", "xmark.circle.fill", .secondary)
         case .reverted: return ("Undone", "arrow.uturn.backward.circle.fill", .orange)
+        case .done: return ("Done by you", "checkmark.seal.fill", .blue)
         case .detected: return ("Pending", "circle", .secondary)
         }
     }
@@ -371,6 +372,13 @@ struct PostCallReviewView: View {
             .opacity(decision.confidence < settings.confidenceThreshold ? 0.55 : 1)
             Spacer(minLength: 8)
             Button("Prepare") { app.prepare(decision) }.controlSize(.small)
+            Button {
+                app.markDone(decision)
+            } label: { Image(systemName: "checkmark.circle") }
+                .buttonStyle(.borderless)
+                .controlSize(.small)
+                .foregroundStyle(.green)
+                .help("Done — I already did this myself")
             // .menuStyle(.button): borderlessButton + hidden indicator stopped
             // opening the reason dropdown (same fix as the popover rows).
             Menu {

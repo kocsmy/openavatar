@@ -395,6 +395,13 @@ struct DecisionRow: View {
             Spacer(minLength: 6)
             Button("Prepare") { app.prepare(decision) }
                 .controlSize(.small)
+            Button {
+                app.markDone(decision)
+            } label: { Image(systemName: "checkmark.circle") }
+                .buttonStyle(.borderless)
+                .controlSize(.small)
+                .foregroundStyle(.green)
+                .help("Done — I already did this myself")
             // .menuStyle(.button) + borderless: the borderlessButton style with a
             // hidden indicator stopped opening the reason dropdown at all.
             Menu {
