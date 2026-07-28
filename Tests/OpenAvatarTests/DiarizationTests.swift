@@ -1,122 +1,218 @@
 import XCTest
 @testable import OpenAvatar
 
-/// Per-voice diarization: separates distinct voices in the system channel,
-/// keeps the mic channel as "You".
+/// Per-voice diarization: the backend finds acoustic speaker turns, transcript
+/// segments take the majority-overlap speaker, and stored fingerprints are
+/// enrolled so names persist across calls. The backend is scripted here —
+/// FluidAudio's real pipeline would download CoreML models in CI.
+final class FakeDiarizerBackend: DiarizerBackend, @unchecked Sendable {
+    var ready = true
+    /// Turns returned per diarize() call, consumed in order.
+    var script: [[SpeakerTurn]] = []
+    var enrolledIDs: [String] = []
+    var finals: [String: [Float]] = [:]
+
+    var isReady: Bool { ready }
+    func prepare() async throws {}
+    func enroll(_ known: [(id: String, name: String?, embedding: [Float])]) {
+        enrolledIDs = known.map(\.id)
+    }
+    func diarize(_ samples: [Float], at time: TimeInterval) throws -> [SpeakerTurn] {
+        script.isEmpty ? [] : script.removeFirst()
+    }
+    func finalEmbeddings() -> [String: [Float]] { finals }
+}
+
 final class DiarizationTests: XCTestCase {
 
-    /// Synthesizes ~1s of a voiced tone at a given pitch as 16 kHz Int16 PCM
-    /// wrapped in an AudioChunk on the system channel.
-    private func chunk(pitch: Double, seconds: Double = 1.0) -> (AudioChunk, TranscriptSegment) {
-        let rate = 16_000.0
-        let n = Int(rate * seconds)
-        var pcm = Data(capacity: n * 2)
-        for i in 0..<n {
-            let t = Double(i) / rate
-            // Fundamental + a couple of harmonics → a voice-like spectrum.
-            let s = 0.5 * sin(2 * .pi * pitch * t)
-                  + 0.3 * sin(2 * .pi * pitch * 2 * t)
-                  + 0.2 * sin(2 * .pi * pitch * 3 * t)
-            let v = Int16(max(-1, min(1, s)) * 20000)
-            withUnsafeBytes(of: v.littleEndian) { pcm.append(contentsOf: $0) }
-        }
-        let audio = AudioChunk(pcm: pcm, source: .system, t0: 0, t1: seconds)
-        let segment = TranscriptSegment(text: "hello", t0: 0, t1: seconds,
-                                        source: .system, confidence: 0.9)
-        return (audio, segment)
+    private func chunk(t0: TimeInterval = 0, seconds: Double = 15,
+                       source: AudioSource = .system) -> AudioChunk {
+        AudioChunk(pcm: Data(count: Int(seconds * 16_000) * 2),
+                   source: source, t0: t0, t1: t0 + seconds)
     }
 
-    private func makeDiarizer() -> SpeakerDiarizer {
-        // Isolated in-memory store so fingerprints don't leak between tests.
-        // The spectral embedder keeps tests deterministic and offline — the
-        // neural one would download CoreML models in CI.
-        let store = try! ContextStore(inMemory: true)
-        return SpeakerDiarizer(store: store, embedderFactory: { SpectralVoiceEmbedder() })
+    private func segment(_ t0: TimeInterval, _ t1: TimeInterval,
+                         source: AudioSource = .system) -> TranscriptSegment {
+        TranscriptSegment(text: "x", t0: t0, t1: t1, source: source, confidence: 0.9)
     }
 
-    func testMicChannelNeverDiarized() async {
-        let diarizer = makeDiarizer()
-        let micChunk = AudioChunk(pcm: Data(count: 32_000), source: .mic, t0: 0, t1: 1)
-        let seg = TranscriptSegment(text: "hi", t0: 0, t1: 1, source: .mic, confidence: 0.9)
-        let hit = await diarizer.label(for: seg, in: micChunk)
+    private func turn(_ id: String, _ start: TimeInterval, _ end: TimeInterval) -> SpeakerTurn {
+        SpeakerTurn(backendSpeakerID: id,
+                    embedding: [Float](repeating: 0.1, count: 256),
+                    start: start, end: end)
+    }
+
+    private func makeDiarizer(store: ContextStore, backend: FakeDiarizerBackend) -> SpeakerDiarizer {
+        SpeakerDiarizer(store: store, backendFactory: { backend })
+    }
+
+    func testMicChannelNeverDiarized() async throws {
+        let store = try ContextStore(inMemory: true)
+        let diarizer = makeDiarizer(store: store, backend: FakeDiarizerBackend())
+        let hit = await diarizer.label(for: segment(0, 1, source: .mic))
         XCTAssertNil(hit)   // → falls back to "You"
-        XCTAssertEqual(seg.speakerLabel, "You")
     }
 
     func testSpeakerLabelPrefersDiarizedSpeaker() {
-        var seg = TranscriptSegment(text: "x", t0: 0, t1: 1, source: .system, confidence: 0.9)
+        var seg = segment(0, 1)
         XCTAssertEqual(seg.speakerLabel, "Others")
         seg.speaker = "Speaker 3"
         XCTAssertEqual(seg.speakerLabel, "Speaker 3")
     }
 
-#if canImport(Accelerate)
-    // New profiles require ≥2 s of audio, so creation-path tests use 2.5 s.
+    /// Two acoustic voices inside one chunk → two persistent profiles, and
+    /// each transcript span gets the voice that did most of its talking.
+    func testTwoVoicesInOneChunkGetDistinctSpeakers() async throws {
+        let store = try ContextStore(inMemory: true)
+        let backend = FakeDiarizerBackend()
+        backend.script = [[turn("A", 0, 7), turn("B", 7, 15)]]
+        let diarizer = makeDiarizer(store: store, backend: backend)
+        await diarizer.beginCall()
 
-    func testDistinctPitchesGetDistinctSpeakers() async {
-        let diarizer = makeDiarizer()
-        // A low voice and a clearly higher voice.
-        let (lowChunk, lowSeg) = chunk(pitch: 110, seconds: 2.5)   // ~male
-        let (highChunk, highSeg) = chunk(pitch: 240, seconds: 2.5) // ~female
-        let a = await diarizer.label(for: lowSeg, in: lowChunk)
-        let b = await diarizer.label(for: highSeg, in: highChunk)
-        XCTAssertNotNil(a)
-        XCTAssertNotNil(b)
-        XCTAssertNotEqual(a?.id, b?.id, "Distinct pitches should not collapse into one speaker")
+        await diarizer.ingest(chunk: chunk())
+        let first = await diarizer.label(for: segment(1, 6))
+        let second = await diarizer.label(for: segment(8, 14))
+
+        XCTAssertNotNil(first)
+        XCTAssertNotNil(second)
+        XCTAssertNotEqual(first?.id, second?.id)
+        XCTAssertEqual(Set([first?.label, second?.label]), ["Speaker 1", "Speaker 2"])
     }
 
-    func testSameVoiceStaysOneSpeaker() async {
-        let diarizer = makeDiarizer()
-        let (c1, s1) = chunk(pitch: 130, seconds: 2.5)
-        let (c2, s2) = chunk(pitch: 132, seconds: 2.5)   // essentially the same voice
-        let a = await diarizer.label(for: s1, in: c1)
-        let b = await diarizer.label(for: s2, in: c2)
-        XCTAssertEqual(a?.id, b?.id, "The same voice should keep one fingerprint")
+    /// The same backend voice across many chunks stays ONE profile — the
+    /// over-splitting complaint (10 speakers on a 1:1 call) can't recur when
+    /// identity is the backend's job.
+    func testSameVoiceAcrossChunksStaysOneSpeaker() async throws {
+        let store = try ContextStore(inMemory: true)
+        let backend = FakeDiarizerBackend()
+        backend.script = [
+            [turn("A", 0, 14)],
+            [turn("A", 15, 29)],
+            [turn("A", 30, 44)]
+        ]
+        let diarizer = makeDiarizer(store: store, backend: backend)
+        await diarizer.beginCall()
+
+        var ids = Set<UUID>()
+        for start in [0.0, 15.0, 30.0] {
+            await diarizer.ingest(chunk: chunk(t0: start))
+            if let hit = await diarizer.label(for: segment(start + 1, start + 13)) {
+                ids.insert(hit.id)
+            }
+        }
+        XCTAssertEqual(ids.count, 1)
         let count = await diarizer.speakerCount
         XCTAssertEqual(count, 1)
     }
 
-    /// The over-splitting fix: a short clip that matches nothing must never
-    /// mint a permanent "Speaker N" — the stray one-utterance speakers were
-    /// the top fingerprinting complaint on 1:1 calls.
-    func testShortUtteranceNeverMintsANewSpeaker() async {
-        let diarizer = makeDiarizer()
-
-        // A short clip with no established voices → no profile at all.
-        let (shortFirst, segFirst) = chunk(pitch: 200, seconds: 0.6)
-        _ = await diarizer.label(for: segFirst, in: shortFirst)
-        var count = await diarizer.speakerCount
-        XCTAssertEqual(count, 0, "A sub-2s clip must not create a fingerprint")
-
-        // Establish a real voice, then throw a short off-voice clip at it.
-        let (long, segLong) = chunk(pitch: 130, seconds: 2.5)
-        _ = await diarizer.label(for: segLong, in: long)
-        let (shortOdd, segOdd) = chunk(pitch: 260, seconds: 0.6)
-        _ = await diarizer.label(for: segOdd, in: shortOdd)
-        count = await diarizer.speakerCount
-        XCTAssertEqual(count, 1, "Short clips may match or stay Others, never mint")
-    }
-
-    /// A named voice keeps its name when it reappears in a later call.
-    func testNamePersistsAcrossCalls() async throws {
+    /// A transcript span with no overlapping turn (below the backend's
+    /// minimum) glues to the nearest turn instead of minting anything.
+    func testGapSegmentFallsToNearestTurnAndNeverMints() async throws {
         let store = try ContextStore(inMemory: true)
-        let diarizer = SpeakerDiarizer(store: store,
-                                       embedderFactory: { SpectralVoiceEmbedder() })
+        let backend = FakeDiarizerBackend()
+        backend.script = [[turn("A", 0, 5)]]
+        let diarizer = makeDiarizer(store: store, backend: backend)
+        await diarizer.beginCall()
 
-        // First call: a voice is heard and the user names it.
-        let (c1, s1) = chunk(pitch: 150, seconds: 2.5)
-        let first = await diarizer.label(for: s1, in: c1)
-        let id = try XCTUnwrap(first?.id)
-        try store.renameSpeaker(id: id, to: "Alice")
-
-        // Second call (fresh diarizer, same store): the same voice is recognized.
-        let diarizer2 = SpeakerDiarizer(store: store,
-                                        embedderFactory: { SpectralVoiceEmbedder() })
-        await diarizer2.beginCall()
-        let (c2, s2) = chunk(pitch: 151, seconds: 2.5)
-        let second = await diarizer2.label(for: s2, in: c2)
-        XCTAssertEqual(second?.id, id, "Same voice should match its stored fingerprint")
-        XCTAssertEqual(second?.label, "Alice", "The assigned name should carry across calls")
+        await diarizer.ingest(chunk: chunk())
+        let near = await diarizer.label(for: segment(5.2, 6.0))   // 0.2s after A stops
+        XCTAssertNotNil(near, "A near-miss should glue to the adjacent turn")
+        let far = await diarizer.label(for: segment(9, 10))       // 4s away
+        XCTAssertNil(far, "Nothing nearby → Others, never a stray profile")
+        let count = await diarizer.speakerCount
+        XCTAssertEqual(count, 1)
     }
-#endif
+
+    /// A named stored fingerprint is enrolled into the backend; when the
+    /// backend assigns its id, the name carries — across calls, no new profile.
+    func testNamePersistsAcrossCallsViaEnrollment() async throws {
+        let store = try ContextStore(inMemory: true)
+        let now = Date()
+        let alice = SpeakerProfile(id: UUID(), name: "Alice", ordinal: 1,
+                                   embedding: [Float](repeating: 0.2, count: 256),
+                                   sampleCount: 12, createdAt: now, updatedAt: now)
+        try store.insertSpeakerProfile(alice)
+
+        let backend = FakeDiarizerBackend()
+        backend.script = [[turn(alice.id.uuidString, 0, 10)]]
+        let diarizer = makeDiarizer(store: store, backend: backend)
+        await diarizer.beginCall()
+
+        await diarizer.ingest(chunk: chunk())
+        XCTAssertEqual(backend.enrolledIDs, [alice.id.uuidString])
+        let hit = await diarizer.label(for: segment(1, 9))
+        XCTAssertEqual(hit?.id, alice.id)
+        XCTAssertEqual(hit?.label, "Alice")
+        let count = await diarizer.speakerCount
+        XCTAssertEqual(count, 1, "An enrolled voice must not mint a duplicate profile")
+    }
+
+    /// Legacy spectral fingerprints (25-dim) are never enrolled — wrong
+    /// vector space — but they stay in the store untouched.
+    func testLegacyProfilesAreNotEnrolled() async throws {
+        let store = try ContextStore(inMemory: true)
+        let now = Date()
+        let legacy = SpeakerProfile(id: UUID(), name: "Old Bob", ordinal: 1,
+                                    embedding: [Float](repeating: 0.3, count: 25),
+                                    sampleCount: 40, createdAt: now, updatedAt: now)
+        try store.insertSpeakerProfile(legacy)
+
+        let backend = FakeDiarizerBackend()
+        backend.script = [[]]
+        let diarizer = makeDiarizer(store: store, backend: backend)
+        await diarizer.beginCall()
+        await diarizer.ingest(chunk: chunk())
+
+        XCTAssertTrue(backend.enrolledIDs.isEmpty)
+        XCTAssertEqual(try store.allSpeakerProfiles().count, 1)
+    }
+
+    /// endCall writes the backend's evolved centroid back to the store.
+    func testEndCallPersistsEvolvedEmbeddings() async throws {
+        let store = try ContextStore(inMemory: true)
+        let backend = FakeDiarizerBackend()
+        backend.script = [[turn("A", 0, 10)]]
+        let diarizer = makeDiarizer(store: store, backend: backend)
+        await diarizer.beginCall()
+        await diarizer.ingest(chunk: chunk())
+        _ = await diarizer.label(for: segment(1, 9))
+
+        let evolved = [Float](repeating: 0.5, count: 256)
+        backend.finals = ["A": evolved]
+        await diarizer.endCall()
+
+        let stored = try XCTUnwrap(store.allSpeakerProfiles().first)
+        XCTAssertEqual(stored.embedding, evolved)
+        XCTAssertGreaterThan(stored.sampleCount, 1)
+    }
+}
+
+/// The pure timeline join: transcript spans → majority-overlap speaker.
+final class SpeakerTimelineTests: XCTestCase {
+
+    func testMajorityOverlapWins() {
+        var t = SpeakerTimeline()
+        let a = UUID(), b = UUID()
+        t.add(speakerID: a, start: 0, end: 4)
+        t.add(speakerID: b, start: 4, end: 10)
+        XCTAssertEqual(t.speaker(overlapping: 1, 9), b)   // 5s of B vs 3s of A
+        XCTAssertEqual(t.speaker(overlapping: 0, 4.5), a)
+    }
+
+    func testNearestWithinToleranceWhenNoOverlap() {
+        var t = SpeakerTimeline()
+        let a = UUID()
+        t.add(speakerID: a, start: 0, end: 3)
+        XCTAssertEqual(t.speaker(overlapping: 3.5, 4.0), a)
+        XCTAssertNil(t.speaker(overlapping: 10, 11))
+    }
+
+    func testTrimDropsOldTurnsOnly() {
+        var t = SpeakerTimeline()
+        let a = UUID(), b = UUID()
+        t.add(speakerID: a, start: 0, end: 5)
+        t.add(speakerID: b, start: 100, end: 110)
+        t.trim(before: 50)
+        XCTAssertEqual(t.turns.map(\.speakerID), [b])
+    }
 }

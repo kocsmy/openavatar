@@ -46,31 +46,42 @@ enum MainSection: String, CaseIterable, Identifiable {
 struct SettingsView: View {
     @State private var section: MainSection = .home
 
+    // A plain fixed sidebar, NOT NavigationSplitView: the split view's
+    // collapsible sidebar column vanished permanently when switching sections
+    // inside our AppKit-hosted window. A fixed HStack has no collapse state —
+    // nothing to break.
     var body: some View {
-        NavigationSplitView {
-            List(selection: $section) {
-                sidebarRow(.home)
-                Section("Library") {
-                    sidebarRow(.transcripts)
-                    sidebarRow(.followUps)
-                    sidebarRow(.metrics)
-                }
-                Section("Setup") {
-                    sidebarRow(.general)
-                    sidebarRow(.transcription)
-                    sidebarRow(.models)
-                    sidebarRow(.integrations)
-                    sidebarRow(.trust)
-                    sidebarRow(.memory)
-                    sidebarRow(.data)
-                }
-            }
-            .listStyle(.sidebar)
-            .navigationSplitViewColumnWidth(min: 180, ideal: 190, max: 220)
-        } detail: {
+        HStack(spacing: 0) {
+            sidebar
+                .frame(width: 190)
+            Divider()
             detail
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
         }
         .frame(width: 950, height: 660)
+    }
+
+    private var sidebar: some View {
+        List(selection: $section) {
+            sidebarRow(.home)
+            Section("Library") {
+                sidebarRow(.transcripts)
+                sidebarRow(.followUps)
+                sidebarRow(.metrics)
+            }
+            Section("Setup") {
+                sidebarRow(.general)
+                sidebarRow(.transcription)
+                sidebarRow(.models)
+                sidebarRow(.integrations)
+                sidebarRow(.trust)
+                sidebarRow(.memory)
+                sidebarRow(.data)
+            }
+        }
+        .listStyle(.sidebar)
+        .scrollContentBackground(.hidden)
+        .background(.background.secondary.opacity(0.5))
     }
 
     private func sidebarRow(_ s: MainSection) -> some View {
