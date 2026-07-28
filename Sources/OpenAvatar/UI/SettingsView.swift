@@ -171,6 +171,7 @@ struct TranscriptionSettingsTab: View {
     @EnvironmentObject var settings: SettingsStore
     @EnvironmentObject var app: AppState
     @StateObject private var whisperSetup = WhisperSetupService()
+    @StateObject private var qwenSetupService = QwenSetupService()
     @State private var sttKey = ""
     @State private var sttKeySaved = KeychainStore.shared.get(.cloudSTTAPIKey) != nil
     @State private var showAdvanced = false
@@ -189,6 +190,11 @@ struct TranscriptionSettingsTab: View {
                         title: "Whisper", badge: whisperBadge,
                         specs: "1× speed · 99 languages · On-device · 150 MB – 1.6 GB",
                         guidance: "Use for languages outside Parakeet's 25 — the widest coverage there is. Pick the model quality below.")
+                    EngineCard(
+                        mode: .qwen, selection: $settings.transcriptionMode,
+                        title: "Qwen3-ASR 1.7B", badge: qwenBadge,
+                        specs: "Most accurate · 52 languages · On-device (MLX) · ~3.4 GB",
+                        guidance: "The strongest open transcription model that runs locally — includes Hungarian. Needs a one-time setup (Python runtime + big download) and ~4 GB of memory while active.")
                     EngineCard(
                         mode: .cloud, selection: $settings.transcriptionMode,
                         title: "Cloud", badge: cloudBadge,
@@ -210,6 +216,8 @@ struct TranscriptionSettingsTab: View {
                 }
             case .parakeet:
                 Section("Parakeet setup") { parakeetSetup }
+            case .qwen:
+                Section("Qwen3-ASR setup") { qwenSetup }
             case .cloud:
                 Section("Cloud STT (OpenAI-compatible, BYO key)") {
                     TextField("Base URL", text: $settings.cloudSTTBaseURL)
@@ -222,9 +230,9 @@ struct TranscriptionSettingsTab: View {
                 }
             }
 
-            // Language + vocabulary apply to Whisper/cloud. Parakeet detects
-            // language automatically and takes no vocabulary hints.
-            if settings.transcriptionMode != .parakeet {
+            // Language + vocabulary apply to Whisper/cloud. Parakeet and Qwen
+            // detect language automatically and take no vocabulary hints.
+            if settings.transcriptionMode != .parakeet && settings.transcriptionMode != .qwen {
                 Section("Language") {
                     Picker("Spoken language", selection: $settings.transcriptionLanguage) {
                         ForEach(TranscriptionLanguage.options, id: \.code) { option in
@@ -271,6 +279,50 @@ struct TranscriptionSettingsTab: View {
 
     private var cloudBadge: (String, Color) {
         sttKeySaved ? ("Key saved", .green) : ("BYO key", .secondary)
+    }
+
+    private var qwenBadge: (String, Color) {
+        if case .done = qwenSetupService.phase { return ("Ready", .green) }
+        if qwenSetupService.isBusy { return ("Setting up…", .orange) }
+        return QwenSetupService.runtimeInstalled ? ("Installed", .green) : ("Setup needed", .orange)
+    }
+
+    @ViewBuilder private var qwenSetup: some View {
+        switch qwenSetupService.phase {
+        case .done(let message):
+            Label(message, systemImage: "checkmark.circle.fill")
+                .font(.callout).foregroundStyle(.green)
+        case .installingUV:
+            Label { Text("Installing uv via Homebrew…") }
+                icon: { ProgressView().controlSize(.small) }
+                .font(.caption)
+        case .downloadingRuntime:
+            Label { Text("Downloading the MLX bridge runtime…") }
+                icon: { ProgressView().controlSize(.small) }
+                .font(.caption)
+        case .preparingModel:
+            Label { Text("First start: installing the Python environment and downloading the model (~3.4 GB) — this can take a while…") }
+                icon: { ProgressView().controlSize(.small) }
+                .font(.caption)
+        case .failed(let message):
+            Label(message, systemImage: "xmark.circle.fill")
+                .font(.caption).foregroundStyle(.red)
+                .textSelection(.enabled)
+            Button("Retry") { Task { await qwenSetupService.run(settings: settings) } }
+                .controlSize(.small)
+        case .idle:
+            HStack(spacing: 10) {
+                Button(QwenSetupService.runtimeInstalled ? "Load model" : "Set up & download")
+                    { Task { await qwenSetupService.run(settings: settings) } }
+                    .buttonStyle(.borderedProminent)
+                Text(QwenSetupService.runtimeInstalled
+                     ? "Runtime installed — this loads the model into memory (downloads it first if missing)."
+                     : "One-time: installs uv (via Homebrew) and the MLX bridge, then downloads ~3.4 GB of model weights. Fully offline afterwards.")
+                    .font(.caption).foregroundStyle(.secondary)
+            }
+        }
+        Text("Language is detected automatically among Qwen3-ASR's 52 (including Hungarian). The model uses ~4 GB of memory while transcription is active.")
+            .font(.caption).foregroundStyle(.secondary)
     }
 
     @ViewBuilder private var parakeetSetup: some View {

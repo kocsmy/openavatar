@@ -246,6 +246,17 @@ private struct TranscriptionStep: View {
                         WhisperSetupView(service: whisperSetup)
                             .padding(6)
                     }
+                } else if settings.transcriptionMode == .qwen {
+                    GroupBox {
+                        Label {
+                            Text("The most accurate local option (52 languages, including Hungarian) — needs a one-time setup in Settings → Transcription after onboarding: a small Python runtime plus ~3.4 GB of model weights, fully offline afterwards.")
+                                .font(.callout)
+                        } icon: {
+                            Image(systemName: "cpu")
+                                .foregroundStyle(Color.accentColor)
+                        }
+                        .padding(6)
+                    }
                 } else if settings.transcriptionMode == .parakeet {
                     GroupBox {
                         Label {

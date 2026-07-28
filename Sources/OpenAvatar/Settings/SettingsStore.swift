@@ -4,12 +4,14 @@ import Combine
 enum TranscriptionMode: String, Codable, CaseIterable {
     case local     // whisper.cpp — private, offline (default)
     case parakeet  // NVIDIA Parakeet via FluidAudio — neural engine, offline
+    case qwen      // Qwen3-ASR-1.7B via MLX bridge — most accurate, offline
     case cloud     // BYO-key OpenAI-compatible STT
 
     var displayName: String {
         switch self {
         case .local: return "Whisper (offline, 99 languages)"
         case .parakeet: return "Parakeet (offline, fastest — 25 languages)"
+        case .qwen: return "Qwen3-ASR (offline, most accurate — 52 languages)"
         case .cloud: return "Cloud (BYO key)"
         }
     }
