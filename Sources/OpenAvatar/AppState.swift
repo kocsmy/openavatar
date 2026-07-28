@@ -231,6 +231,7 @@ final class AppState: ObservableObject {
             isListening = true
             Task {
                 await detector.updateWakePhrase(settings.assistantName)
+                await detector.beginCall()   // no rolling context from the last call
                 await diarizer.beginCall()   // reload fingerprints, fresh call state
             }
             refreshCalendar()            // identify who's on the call
@@ -324,34 +325,56 @@ final class AppState: ObservableObject {
 
         let callID = currentCallID
         let callStart = currentCallStartedAt
+        // Snapshot THIS call's items now. The pipeline below is async and a
+        // new session may start meanwhile (auto-start makes that likely) —
+        // the shared published arrays then belong to the NEW call, so every
+        // step works on the snapshot and only mirrors into the published
+        // state while this call is still the current one. (Regression: two
+        // back-to-back calls ended up with each other's items in their
+        // digests.)
+        let decisionsSnapshot = detectedDecisions
         Task {
+            var callDecisions = decisionsSnapshot
             if let callID {
-                // Final detection pass, then open the post-call review sheet.
+                // Final detection pass.
                 if let fresh = try? await detector.flush(callID: callID) {
-                    detectedDecisions.append(contentsOf: fresh)
+                    callDecisions.append(contentsOf: fresh)
+                    if currentCallID == callID {
+                        detectedDecisions.append(contentsOf: fresh)
+                    }
                 }
 
                 // Sanity pass before the user sees anything: collapse items
                 // that describe the same task worded differently. Dropped ones
                 // are recorded as dismissed-duplicate, not deleted, so they
-                // stay visible under "Show handled".
-                if detectedDecisions.count >= 2 {
-                    let (kept, droppedIDs) = await sanitizer.dedupe(detectedDecisions)
+                // stay visible on the meeting page.
+                if callDecisions.count >= 2 {
+                    let (kept, droppedIDs) = await sanitizer.dedupe(callDecisions)
                     for id in droppedIDs {
                         try? store.updateDecisionStatus(id, status: .dismissed,
                                                         dismissReason: .duplicate)
                     }
-                    detectedDecisions = kept
+                    callDecisions = kept
+                    if currentCallID == callID {
+                        detectedDecisions = kept
+                    }
                 }
-                let summary = detectedDecisions.map(\.summary).joined(separator: "; ")
+                // Digest strictly from THIS call's records — never from shared
+                // in-memory state that another session may own by now.
+                let digestItems = ((try? store.decisions(callID: callID)) ?? [])
+                    .filter { $0.status != .dismissed }
+                let summary = digestItems.map(\.summary).joined(separator: "; ")
                 try? store.endCall(callID, summary: summary.isEmpty ? nil : summary)
 
-                // Capture time-referenced follow-ups to confirm in the review.
+                // Capture time-referenced follow-ups to confirm on the
+                // meeting page.
                 if settings.followUpsEnabled {
                     if let found = try? await followUpExtractor.extract(
                         callID: callID, callStart: callStart ?? Date()) {
                         for f in found { try? store.insertFollowUp(f) }
-                        pendingFollowUps = found
+                        if currentCallID == callID {
+                            pendingFollowUps = found
+                        }
                     }
                 }
 

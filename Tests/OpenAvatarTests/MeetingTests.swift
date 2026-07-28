@@ -54,6 +54,27 @@ final class MeetingTests: XCTestCase {
         XCTAssertEqual(forA.map(\.title), ["Check script IDs"])
     }
 
+    func testDecisionsAreScopedToTheirCall() throws {
+        // The end-of-call digest is built from store.decisions(callID:) —
+        // regression: it used to read a shared in-memory array that a
+        // back-to-back next session could already own, mixing two calls'
+        // items into both digests.
+        let store = try ContextStore(inMemory: true)
+        let callA = try store.startCall(app: "Zoom")
+        let callB = try store.startCall(app: "Meet")
+        let a = Decision(callID: callA, quote: "q1", intent: .createTicket,
+                         summary: "Fix tracking", assigneeHint: nil, confidence: 0.8,
+                         addressedToAssistant: false, source: .mic)
+        let b = Decision(callID: callB, quote: "q2", intent: .other,
+                         summary: "Ship roadmap", assigneeHint: nil, confidence: 0.8,
+                         addressedToAssistant: false, source: .mic)
+        try store.insert(a)
+        try store.insert(b)
+
+        XCTAssertEqual((try store.decisions(callID: callA)).map(\.summary), ["Fix tracking"])
+        XCTAssertEqual((try store.decisions(callID: callB)).map(\.summary), ["Ship roadmap"])
+    }
+
     func testDigestSplitsIntoScannableBullets() {
         // The digest is decision summaries joined with "; " — the summary pane
         // must never show it as one wall of text.
