@@ -209,9 +209,13 @@ struct TranscriptionSettingsTab: View {
                 Section("Whisper setup") {
                     WhisperSetupView(service: whisperSetup)
                     WhisperModelPickerView(service: whisperSetup)
-                    DisclosureGroup("Advanced: paths", isExpanded: $showAdvanced) {
-                        TextField("whisper-cli path", text: $settings.whisperCLIPath)
-                        TextField("Model path (.bin)", text: $settings.whisperModelPath)
+                    // Path overrides are an escape hatch for broken setups —
+                    // once everything is ready they only invite accidents.
+                    if !WhisperSetupService.isReady(settings: settings) {
+                        DisclosureGroup("Advanced: paths", isExpanded: $showAdvanced) {
+                            TextField("whisper-cli path", text: $settings.whisperCLIPath)
+                            TextField("Model path (.bin)", text: $settings.whisperModelPath)
+                        }
                     }
                 }
             case .parakeet:
@@ -243,9 +247,12 @@ struct TranscriptionSettingsTab: View {
                         .font(.caption).foregroundStyle(.secondary)
                 }
                 Section("Custom vocabulary") {
-                    TextField("Names & jargon, comma-separated (e.g. PostHog, Termly, Linear)",
-                              text: $settings.customVocabulary)
-                    Text("Transcription is biased toward spelling these correctly. Speaker names and calendar attendees are added automatically on each call.")
+                    TextField("Names & jargon",
+                              text: $settings.customVocabulary,
+                              prompt: Text("PostHog, Termly, Linear…"),
+                              axis: .vertical)
+                        .lineLimit(1...4)
+                    Text("Type words comma-separated and transcription is biased toward spelling them correctly. Speaker names and calendar attendees are added automatically on each call.")
                         .font(.caption).foregroundStyle(.secondary)
                 }
             }
@@ -464,24 +471,27 @@ struct WhisperModelPickerView: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
-            HStack(spacing: 8) {
-                Picker("Transcription quality", selection: $selected) {
-                    ForEach(WhisperModel.allCases) { model in
-                        Text(model.displayName).tag(model)
-                    }
-                }
-                if selected != active {
-                    Button("Download & switch") {
-                        Task { await service.run(settings: settings, model: selected) }
-                    }
-                    .controlSize(.small)
-                    .disabled(service.isBusy)
+            Picker("Transcription quality", selection: $selected) {
+                ForEach(WhisperModel.allCases) { model in
+                    Text(model.displayName).tag(model)
                 }
             }
-            Text("Bigger models transcribe noticeably better, especially with accents, names, and crosstalk — Small is the sweet spot for most Macs; Large v3 Turbo is the best that still keeps up live. Downloads happen once.")
+            .disabled(service.isBusy)
+            Text("Bigger models transcribe noticeably better, especially with accents, names, and crosstalk — Small is the sweet spot for most Macs; Large v3 Turbo is the best that still keeps up live. Switching applies immediately (first use of a model downloads it once).")
                 .font(.caption).foregroundStyle(.secondary)
         }
         .onAppear { selected = active ?? .base }
+        // Picking a quality IS the action: download (once) and switch, no
+        // second button to forget. The path write below confirms the change.
+        .onChange(of: selected) { _, newValue in
+            guard newValue != active, !service.isBusy else { return }
+            Task {
+                await service.run(settings: settings, model: newValue)
+                // On failure snap back to the still-active model so the same
+                // choice can be re-picked to retry.
+                if case .failed = service.phase { selected = active ?? .base }
+            }
+        }
         .onChange(of: settings.whisperModelPath) { _, _ in
             selected = active ?? selected
         }
