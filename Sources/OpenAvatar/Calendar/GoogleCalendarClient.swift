@@ -39,6 +39,16 @@ struct CalendarEvent: Sendable, Equatable, Identifiable {
             return true
         }
     }
+
+    /// Compact who's-there line: "Salim + 3 more" (first name of the first
+    /// other participant, then a count). Nil when nobody else is invited.
+    func participantSummary(excludingSelfEmail selfEmail: String) -> String? {
+        let others = others(excludingSelfEmail: selfEmail)
+        guard let first = others.first else { return nil }
+        let firstName = first.name.split(separator: " ").first.map(String.init) ?? first.name
+        let rest = others.count - 1
+        return rest > 0 ? "\(firstName) + \(rest) more" : firstName
+    }
 }
 
 /// One calendar the account can read — for the "which calendar" picker.

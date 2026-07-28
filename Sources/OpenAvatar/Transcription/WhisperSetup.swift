@@ -82,6 +82,14 @@ final class WhisperSetupService: ObservableObject {
 
     private static let brewCandidates = ["/opt/homebrew/bin/brew", "/usr/local/bin/brew"]
 
+    /// Which model a setup run should target: an explicit request wins,
+    /// otherwise whatever the settings path already points at, and base only
+    /// as the true first-time default. (Regression: "Re-check" used to hard-
+    /// default to base and silently downgrade a chosen larger model.)
+    nonisolated static func resolveModel(requested: WhisperModel?, currentPath: String) -> WhisperModel {
+        requested ?? WhisperModel.from(path: currentPath) ?? .base
+    }
+
     // MARK: Detection
 
     static func findWhisperCLI(settingsPath: String) -> String? {
@@ -115,7 +123,11 @@ final class WhisperSetupService: ObservableObject {
     /// Installs whisper-cli if needed and downloads `model` (skips the download
     /// when the file is already present), then points settings at it — so this
     /// doubles as the "switch model quality" action.
-    func run(settings: SettingsStore, model: WhisperModel = .base) async {
+    ///
+    /// Pass nil to keep whichever quality is already active: "Re-check" and
+    /// onboarding must never silently downgrade a user's chosen model to base.
+    func run(settings: SettingsStore, model: WhisperModel? = nil) async {
+        let model = Self.resolveModel(requested: model, currentPath: settings.whisperModelPath)
         phase = .checking
 
         // 1. whisper-cli binary.

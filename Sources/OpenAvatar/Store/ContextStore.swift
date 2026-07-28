@@ -164,6 +164,20 @@ final class ContextStore: @unchecked Sendable {
         migrator.registerMigration("v7-user-notes") { db in
             try db.execute(sql: "ALTER TABLE calls ADD COLUMN user_notes TEXT")
         }
+        // v8 — meetings: calls carry the calendar event's title, and notes can
+        // be written BEFORE a call against the upcoming event (they seed the
+        // call's own notes once it starts).
+        migrator.registerMigration("v8-meetings") { db in
+            try db.execute(sql: "ALTER TABLE calls ADD COLUMN title TEXT")
+            try db.execute(sql: """
+                CREATE TABLE event_notes (
+                    event_id TEXT PRIMARY KEY,
+                    title TEXT,
+                    start_at DOUBLE,
+                    notes TEXT NOT NULL
+                )
+                """)
+        }
         try migrator.migrate(dbQueue)
     }
 
@@ -189,6 +203,17 @@ final class ContextStore: @unchecked Sendable {
                 """, arguments: [f.id.uuidString, f.callID?.uuidString, f.title, f.quote,
                                  f.dueAt.timeIntervalSince1970, f.createdAt.timeIntervalSince1970,
                                  f.status.rawValue])
+        }
+    }
+
+    /// Every follow-up born from one call, regardless of status — the meeting
+    /// detail view shows them next to the call's action items.
+    func followUps(callID: UUID) throws -> [FollowUp] {
+        try dbQueue.read { db in
+            let rows = try Row.fetchAll(db, sql: """
+                SELECT * FROM followups WHERE call_id = ? ORDER BY due_at
+                """, arguments: [callID.uuidString])
+            return rows.compactMap(Self.followUp(from:))
         }
     }
 
@@ -278,12 +303,24 @@ final class ContextStore: @unchecked Sendable {
         let summary: String?
         var notes: String?
         var userNotes: String?
+        /// Calendar event title, when the call happened during one.
+        var title: String?
+
+        /// Best human name for this meeting: the calendar event's title when we
+        /// have it, otherwise the hosting app ("Zoom call").
+        var displayTitle: String {
+            if let title, !title.isEmpty { return title }
+            if let app, !app.isEmpty {
+                return app.localizedCaseInsensitiveContains("call") ? app : "\(app) call"
+            }
+            return "Call"
+        }
     }
 
     func listCalls(limit: Int = 200) throws -> [CallRecord] {
         try dbQueue.read { db in
             let rows = try Row.fetchAll(db, sql: """
-                SELECT id, started_at, ended_at, app, summary, notes, user_notes FROM calls
+                SELECT id, started_at, ended_at, app, summary, notes, user_notes, title FROM calls
                 ORDER BY started_at DESC LIMIT ?
                 """, arguments: [limit])
             return rows.compactMap { row in
@@ -296,8 +333,37 @@ final class ContextStore: @unchecked Sendable {
                     app: row["app"] as String?,
                     summary: row["summary"] as String?,
                     notes: row["notes"] as String?,
-                    userNotes: row["user_notes"] as String?)
+                    userNotes: row["user_notes"] as String?,
+                    title: row["title"] as String?)
             }
+        }
+    }
+
+    /// Stamp the calendar event's title onto the call record.
+    func updateCallTitle(_ callID: UUID, title: String) throws {
+        try dbQueue.write { db in
+            try db.execute(sql: "UPDATE calls SET title = ? WHERE id = ?",
+                           arguments: [title, callID.uuidString])
+        }
+    }
+
+    // MARK: - Pre-call event notes (written against an upcoming meeting)
+
+    /// Notes typed for an upcoming calendar event, before any call exists.
+    func eventNotes(eventID: String) throws -> String {
+        try dbQueue.read { db in
+            try String.fetchOne(db, sql: "SELECT notes FROM event_notes WHERE event_id = ?",
+                                arguments: [eventID]) ?? ""
+        }
+    }
+
+    func updateEventNotes(eventID: String, title: String?, start: Date?, notes: String) throws {
+        try dbQueue.write { db in
+            try db.execute(sql: """
+                INSERT INTO event_notes (event_id, title, start_at, notes) VALUES (?, ?, ?, ?)
+                ON CONFLICT(event_id) DO UPDATE SET title = excluded.title,
+                    start_at = excluded.start_at, notes = excluded.notes
+                """, arguments: [eventID, title, start?.timeIntervalSince1970, notes])
         }
     }
 

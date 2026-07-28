@@ -34,4 +34,20 @@ final class ParakeetTranscriberTests: XCTestCase {
         }
         XCTAssertEqual(TranscriptionMode(rawValue: "parakeet"), .parakeet)
     }
+
+    // MARK: Whisper model-quality resolution
+
+    /// Regression: "Re-check" ran setup with a hard default of .base, silently
+    /// downgrading a user who had picked (and downloaded) a bigger model.
+    func testWhisperRecheckKeepsTheActiveModel() {
+        let largePath = "/models/ggml-large-v3-turbo.bin"
+        XCTAssertEqual(WhisperSetupService.resolveModel(requested: nil, currentPath: largePath),
+                       .largeTurbo)
+        // An explicit pick always wins.
+        XCTAssertEqual(WhisperSetupService.resolveModel(requested: .small, currentPath: largePath),
+                       .small)
+        // True first run (no model configured yet) starts at base.
+        XCTAssertEqual(WhisperSetupService.resolveModel(requested: nil, currentPath: ""),
+                       .base)
+    }
 }
