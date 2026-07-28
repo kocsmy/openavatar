@@ -9,21 +9,24 @@ struct HomeTab: View {
 
     var body: some View {
         ScrollView {
-            VStack(alignment: .leading, spacing: 16) {
+            VStack(alignment: .leading, spacing: DS.s24) {
                 Text("Coming up")
-                    .font(.title2.weight(.semibold))
+                    .font(.dsScreenTitle)
 
                 statusCard
 
                 if !settings.calendarEnabled || app.upcomingEvents.isEmpty {
                     emptyState
                 } else {
-                    ForEach(days, id: \.day) { group in
-                        daySection(group.day, events: group.events)
+                    VStack(alignment: .leading, spacing: DS.s24) {
+                        ForEach(days, id: \.day) { group in
+                            daySection(group.day, events: group.events)
+                        }
                     }
                 }
             }
-            .padding(20)
+            .padding(DS.s24)
+            .frame(maxWidth: 760, alignment: .leading)
             .frame(maxWidth: .infinity, alignment: .leading)
         }
         .onAppear {
@@ -34,28 +37,27 @@ struct HomeTab: View {
     // MARK: Capture status
 
     @ViewBuilder private var statusCard: some View {
-        HStack(spacing: 10) {
-            Image(systemName: app.isListening ? "waveform.circle.fill"
-                                              : (settings.autoStartOnCall ? "bolt.circle" : "hand.raised.circle"))
-                .font(.title3)
-                .foregroundStyle(app.isListening ? Color.green : Color.brand)
+        HStack(spacing: DS.s12) {
             if app.isListening {
+                DSIconPlate(systemName: "waveform", tint: .green)
                 Text("Transcribing now — notes and action items are being taken.")
-                    .font(.callout)
+                    .font(.dsBody)
                 Spacer()
                 Button("Stop") { app.stopListening() }.controlSize(.small)
             } else if settings.autoStartOnCall {
+                DSIconPlate(systemName: "bolt.fill", tint: .brand)
                 Text("When you join a call, transcription starts by itself — no clicks needed.")
-                    .font(.callout).foregroundStyle(.secondary)
+                    .font(.dsBody).foregroundStyle(.secondary)
                 Spacer()
             } else {
+                DSIconPlate(systemName: "hand.raised", tint: .secondary)
                 Text("Auto-start is off — start capture from the menu bar when a call begins (or turn it on in General).")
-                    .font(.callout).foregroundStyle(.secondary)
+                    .font(.dsBody).foregroundStyle(.secondary)
                 Spacer()
             }
         }
-        .padding(12)
-        .background(.background.secondary, in: RoundedRectangle(cornerRadius: 10))
+        .padding(DS.s12)
+        .background(DS.surface, in: RoundedRectangle(cornerRadius: DS.rLarge, style: .continuous))
     }
 
     @ViewBuilder private var emptyState: some View {
@@ -68,7 +70,7 @@ struct HomeTab: View {
             ContentUnavailableView(
                 "Nothing scheduled",
                 systemImage: "calendar",
-                description: Text("No meetings in the next 7 days on your primary calendar."))
+                description: Text("No meetings in the next 7 days on your selected calendar."))
         }
     }
 
@@ -85,79 +87,69 @@ struct HomeTab: View {
     }
 
     private func daySection(_ day: Date, events: [CalendarEvent]) -> some View {
-        HStack(alignment: .top, spacing: 14) {
+        HStack(alignment: .top, spacing: DS.s16) {
             VStack(spacing: 0) {
                 Text(day.formatted(.dateTime.day()))
-                    .font(.title2.weight(.semibold))
+                    .font(.system(size: 22, weight: .semibold))
+                    .foregroundStyle(Calendar.current.isDateInToday(day) ? Color.brand : .primary)
                 Text(day.formatted(.dateTime.weekday(.abbreviated)))
-                    .font(.caption).foregroundStyle(.secondary)
+                    .font(.dsMeta).foregroundStyle(.secondary)
             }
             .frame(width: 44)
+            .padding(.top, DS.s6)
 
-            VStack(alignment: .leading, spacing: 8) {
+            VStack(alignment: .leading, spacing: DS.s8) {
                 ForEach(events) { event in
                     eventRow(event)
                 }
             }
             .frame(maxWidth: .infinity, alignment: .leading)
         }
-        .padding(.vertical, 6)
     }
 
-    /// The whole card opens the meeting's notes page — pre-write notes there;
+    /// The whole row opens the meeting's notes page — pre-write notes there;
     /// they carry into the call once it starts.
     private func eventRow(_ event: CalendarEvent) -> some View {
-        Button {
+        DSRow {
             app.openEventNotes(event)
-        } label: {
-            HStack(alignment: .center, spacing: 10) {
-                RoundedRectangle(cornerRadius: 2)
-                    .fill(Color.brand)
-                    .frame(width: 3, height: 34)
-                VStack(alignment: .leading, spacing: 2) {
-                    HStack(spacing: 6) {
-                        Text(event.title).font(.callout.weight(.medium))
+        } content: {
+            HStack(alignment: .center, spacing: DS.s12) {
+                VStack(alignment: .leading, spacing: DS.s4) {
+                    HStack(spacing: DS.s6) {
+                        Text(event.title).font(.dsRowTitle).lineLimit(1)
                         if isNow(event) {
-                            Text("Now")
-                                .font(.caption2.weight(.semibold))
-                                .padding(.horizontal, 6).padding(.vertical, 1)
-                                .background(Color.green.opacity(0.18), in: Capsule())
-                                .foregroundStyle(.green)
-                        }
-                    }
-                    HStack(spacing: 6) {
-                        if let start = event.start {
-                            Text(timeRange(start, event.end))
-                                .font(.caption).foregroundStyle(.secondary)
+                            DSChip(text: "Now", tint: .green)
                         }
                         if let service = event.conferenceService {
-                            Text(service)
-                                .font(.caption2)
-                                .padding(.horizontal, 6).padding(.vertical, 1)
-                                .background(Color.brand.opacity(0.12), in: Capsule())
-                                .foregroundStyle(Color.brand)
-                        }
-                        if let who = event.participantSummary(excludingSelfEmail: settings.calendarSelfEmail) {
-                            Label(who, systemImage: "person.2")
-                                .font(.caption2).foregroundStyle(.tertiary).lineLimit(1)
+                            DSChip(text: service)
                         }
                     }
+                    DSMetaLine(parts: metaParts(event))
                 }
-                Spacer()
+                Spacer(minLength: DS.s8)
                 if isNow(event) && !app.isListening {
                     Button("Start notes") { app.startListening() }
                         .controlSize(.small)
+                        .tint(.brand)
                 }
                 Image(systemName: "chevron.right")
-                    .font(.caption)
+                    .font(.dsMeta)
                     .foregroundStyle(.quaternary)
             }
-            .padding(10)
-            .contentShape(RoundedRectangle(cornerRadius: 8))
-            .background(.background.secondary, in: RoundedRectangle(cornerRadius: 8))
+            .padding(DS.s12)
         }
-        .buttonStyle(.plain)
         .help("Open this meeting's notes — write yours before the call starts")
+    }
+
+    private func metaParts(_ event: CalendarEvent) -> [String] {
+        var parts: [String] = []
+        if let start = event.start {
+            parts.append(timeRange(start, event.end))
+        }
+        if let who = event.participantSummary(excludingSelfEmail: settings.calendarSelfEmail) {
+            parts.append(who)
+        }
+        return parts
     }
 
     private func isNow(_ event: CalendarEvent) -> Bool {

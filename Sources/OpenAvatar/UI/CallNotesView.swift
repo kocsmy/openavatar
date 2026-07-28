@@ -61,6 +61,7 @@ struct CallNotesWindowView: View {
             }
         }
         .frame(minWidth: 560, minHeight: 460)
+        .tint(.brand)
         .onAppear { loadDraft() }
         .onChange(of: app.currentCallID) { _, _ in loadDraft() }
         .onChange(of: app.previewEvent) { _, _ in loadDraft() }
@@ -70,17 +71,16 @@ struct CallNotesWindowView: View {
     // MARK: Headers
 
     private var callHeader: some View {
-        HStack(spacing: 10) {
-            Image(systemName: app.isListening ? "waveform" : "checkmark.circle")
-                .font(.title3)
-                .foregroundStyle(app.isListening ? Color.red : Color.green)
+        HStack(spacing: DS.s12) {
+            DSIconPlate(systemName: app.isListening ? "waveform" : "checkmark",
+                        tint: app.isListening ? .red : .green)
             VStack(alignment: .leading, spacing: 1) {
                 Text(app.isListening ? "Transcribing this call" : "Call ended")
                     .font(.headline)
                 Text(app.isListening
                      ? "\(settings.assistantName) is taking notes — write your own alongside."
                      : "Your notes are saved with the call and included in exports.")
-                    .font(.caption).foregroundStyle(.secondary)
+                    .font(.dsMeta).foregroundStyle(.secondary)
             }
             Spacer()
             if app.isListening {
@@ -92,36 +92,34 @@ struct CallNotesWindowView: View {
     }
 
     private func eventHeader(_ event: CalendarEvent) -> some View {
-        HStack(alignment: .top, spacing: 10) {
-            Image(systemName: "calendar")
-                .font(.title3)
-                .foregroundStyle(Color.brand)
-            VStack(alignment: .leading, spacing: 3) {
-                Text(event.title).font(.headline)
-                HStack(spacing: 6) {
-                    if let start = event.start {
-                        Text(eventTimeLabel(start, event.end))
-                            .font(.caption).foregroundStyle(.secondary)
-                    }
+        HStack(alignment: .top, spacing: DS.s12) {
+            DSIconPlate(systemName: "calendar", tint: .brand)
+            VStack(alignment: .leading, spacing: DS.s4) {
+                HStack(spacing: DS.s6) {
+                    Text(event.title).font(.headline)
                     if let service = event.conferenceService {
-                        Text(service)
-                            .font(.caption2)
-                            .padding(.horizontal, 6).padding(.vertical, 1)
-                            .background(Color.brand.opacity(0.12), in: Capsule())
-                            .foregroundStyle(Color.brand)
+                        DSChip(text: service)
                     }
                 }
-                if let who = event.participantSummary(excludingSelfEmail: settings.calendarSelfEmail) {
-                    Label(who, systemImage: "person.2")
-                        .font(.caption).foregroundStyle(.secondary)
-                }
+                DSMetaLine(parts: eventMeta(event))
                 Text(settings.autoStartOnCall
                      ? "Notes written here carry into the call — transcription starts by itself when you join."
                      : "Notes written here carry into the call once you start listening.")
-                    .font(.caption2).foregroundStyle(.tertiary)
+                    .font(.dsMeta).foregroundStyle(.tertiary)
             }
             Spacer()
         }
+    }
+
+    private func eventMeta(_ event: CalendarEvent) -> [String] {
+        var parts: [String] = []
+        if let start = event.start {
+            parts.append(eventTimeLabel(start, event.end))
+        }
+        if let who = event.participantSummary(excludingSelfEmail: settings.calendarSelfEmail) {
+            parts.append(who)
+        }
+        return parts
     }
 
     private func eventTimeLabel(_ start: Date, _ end: Date?) -> String {
@@ -138,17 +136,18 @@ struct CallNotesWindowView: View {
         ZStack(alignment: .topLeading) {
             TextEditor(text: $draft)
                 .font(.body)
+                .lineSpacing(3)
                 .scrollContentBackground(.hidden)
-                .padding(.horizontal, 12)
-                .padding(.vertical, 8)
+                .padding(.horizontal, DS.s16)
+                .padding(.vertical, DS.s8)
             if draft.isEmpty {
                 Text(previewEvent == nil
                      ? "Write your own notes for this call — saved automatically."
                      : "Write your notes for this meeting ahead of time — saved automatically.")
                     .font(.body)
                     .foregroundStyle(.tertiary)
-                    .padding(.horizontal, 17)
-                    .padding(.vertical, 16)
+                    .padding(.horizontal, DS.s16 + 5)
+                    .padding(.vertical, DS.s16)
                     .allowsHitTesting(false)
             }
         }

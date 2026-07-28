@@ -265,36 +265,33 @@ struct MeetingsTab: View {
     // MARK: List
 
     private var meetingList: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            HStack {
-                VStack(alignment: .leading, spacing: 2) {
-                    Text("Meetings").font(.title2.weight(.semibold))
-                    Text("Every call, transcribed and stored locally. Click one to open its notes, actions, and transcript.")
-                        .font(.caption).foregroundStyle(.secondary)
+        ScrollView {
+            VStack(alignment: .leading, spacing: DS.s24) {
+                HStack(alignment: .firstTextBaseline) {
+                    Text("Meetings").font(.dsScreenTitle)
+                    Spacer()
+                    Button {
+                        load()
+                    } label: { Image(systemName: "arrow.clockwise") }
+                        .buttonStyle(.borderless)
+                        .help("Refresh")
                 }
-                Spacer()
-                Button {
-                    load()
-                } label: { Image(systemName: "arrow.clockwise") }
-                    .buttonStyle(.borderless)
-                    .help("Refresh")
-            }
 
-            if calls.isEmpty {
-                ContentUnavailableView("No meetings yet", systemImage: "text.quote",
-                                       description: Text("Meetings appear here after your first call."))
-            } else {
-                ScrollView {
-                    LazyVStack(alignment: .leading, spacing: 14, pinnedViews: []) {
+                if calls.isEmpty {
+                    ContentUnavailableView("No meetings yet", systemImage: "text.quote",
+                                           description: Text("Meetings appear here after your first call."))
+                } else {
+                    VStack(alignment: .leading, spacing: DS.s20) {
                         ForEach(days, id: \.day) { group in
                             daySection(group.day, calls: group.calls)
                         }
                     }
-                    .padding(.vertical, 6)
                 }
             }
+            .padding(DS.s24)
+            .frame(maxWidth: 760, alignment: .leading)
+            .frame(maxWidth: .infinity, alignment: .leading)
         }
-        .padding()
     }
 
     private var days: [(day: Date, calls: [ContextStore.CallRecord])] {
@@ -306,11 +303,8 @@ struct MeetingsTab: View {
     }
 
     private func daySection(_ day: Date, calls: [ContextStore.CallRecord]) -> some View {
-        VStack(alignment: .leading, spacing: 6) {
-            Text(dayLabel(day))
-                .font(.caption.weight(.semibold))
-                .foregroundStyle(.secondary)
-                .textCase(.uppercase)
+        VStack(alignment: .leading, spacing: DS.s8) {
+            DSSectionLabel(text: dayLabel(day))
             ForEach(calls) { call in
                 meetingRow(call)
             }
@@ -325,46 +319,37 @@ struct MeetingsTab: View {
     }
 
     private func meetingRow(_ call: ContextStore.CallRecord) -> some View {
-        Button {
+        DSRow {
             selectedCallID = call.id
-        } label: {
-            HStack(alignment: .center, spacing: 10) {
-                RoundedRectangle(cornerRadius: 2)
-                    .fill(Color.brand)
-                    .frame(width: 3, height: 36)
-                VStack(alignment: .leading, spacing: 2) {
-                    Text(call.displayTitle)
-                        .font(.callout.weight(.medium))
-                        .lineLimit(1)
-                    HStack(spacing: 6) {
-                        Text(call.startedAt.formatted(date: .omitted, time: .shortened))
-                            .font(.caption).foregroundStyle(.secondary)
-                        if let ended = call.endedAt {
-                            Text(MeetingFormat.duration(call.startedAt, ended))
-                                .font(.caption).foregroundStyle(.tertiary)
-                        }
+        } content: {
+            HStack(alignment: .center, spacing: DS.s12) {
+                VStack(alignment: .leading, spacing: DS.s4) {
+                    HStack(spacing: DS.s6) {
+                        Text(call.displayTitle).font(.dsRowTitle).lineLimit(1)
                         if let app = call.app, !app.isEmpty {
-                            Text(app)
-                                .font(.caption2)
-                                .padding(.horizontal, 6).padding(.vertical, 1)
-                                .background(Color.brand.opacity(0.12), in: Capsule())
-                                .foregroundStyle(Color.brand)
+                            DSChip(text: app)
                         }
                     }
-                    if let summary = call.summary, !summary.isEmpty {
-                        Text(summary).font(.caption2).foregroundStyle(.tertiary).lineLimit(1)
-                    }
+                    DSMetaLine(parts: rowMeta(call))
                 }
-                Spacer()
+                Spacer(minLength: DS.s8)
                 Image(systemName: "chevron.right")
-                    .font(.caption)
+                    .font(.dsMeta)
                     .foregroundStyle(.quaternary)
             }
-            .padding(10)
-            .contentShape(RoundedRectangle(cornerRadius: 8))
-            .background(.background.secondary, in: RoundedRectangle(cornerRadius: 8))
+            .padding(DS.s12)
         }
-        .buttonStyle(.plain)
+    }
+
+    private func rowMeta(_ call: ContextStore.CallRecord) -> [String] {
+        var parts = [call.startedAt.formatted(date: .omitted, time: .shortened)]
+        if let ended = call.endedAt {
+            parts.append(MeetingFormat.duration(call.startedAt, ended))
+        }
+        if let summary = call.summary, !summary.isEmpty {
+            parts.append(summary)
+        }
+        return parts
     }
 }
 
@@ -399,18 +384,18 @@ struct MeetingDetailView: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             header
-                .padding(.horizontal, 20)
-                .padding(.top, 14)
-                .padding(.bottom, 10)
+                .padding(.horizontal, DS.s24)
+                .padding(.top, DS.s16)
+                .padding(.bottom, DS.s12)
 
             Picker("", selection: $pane) {
                 ForEach(Pane.allCases, id: \.self) { Text($0.rawValue).tag($0) }
             }
             .pickerStyle(.segmented)
             .labelsHidden()
-            .frame(maxWidth: 340)
-            .padding(.horizontal, 20)
-            .padding(.bottom, 10)
+            .frame(maxWidth: 320)
+            .padding(.horizontal, DS.s24)
+            .padding(.bottom, DS.s12)
 
             Divider()
 
@@ -434,16 +419,19 @@ struct MeetingDetailView: View {
     // MARK: Header
 
     private var header: some View {
-        VStack(alignment: .leading, spacing: 8) {
+        VStack(alignment: .leading, spacing: DS.s8) {
             HStack {
-                Button(action: onBack) {
+                DSRow(style: .ghost) {
+                    onBack()
+                } content: {
                     Label("Meetings", systemImage: "chevron.left")
-                        .font(.callout)
+                        .font(.dsBody)
+                        .padding(.horizontal, DS.s8)
+                        .padding(.vertical, DS.s4)
                 }
-                .buttonStyle(.borderless)
                 Spacer()
                 if let message {
-                    Text(message).font(.caption).foregroundStyle(.secondary)
+                    Text(message).font(.dsMeta).foregroundStyle(.secondary)
                 }
                 Menu {
                     Button("Open call review") { app.reviewPastCall(call.id) }
@@ -469,44 +457,38 @@ struct MeetingDetailView: View {
             }
 
             Text(call.displayTitle)
-                .font(.title.weight(.semibold))
+                .font(.dsPageTitle)
                 .lineLimit(2)
+                .padding(.top, DS.s4)
 
-            HStack(spacing: 8) {
-                metaChip(icon: "calendar",
-                         text: call.startedAt.formatted(date: .abbreviated, time: .shortened))
-                if let ended = call.endedAt {
-                    metaChip(icon: "clock", text: MeetingFormat.duration(call.startedAt, ended))
-                }
-                if let hostApp = call.app, !hostApp.isEmpty {
-                    metaChip(icon: "video", text: hostApp)
-                }
-                if !callSpeakers.isEmpty {
-                    metaChip(icon: "person.2",
-                             text: "\(callSpeakers.count) speaker\(callSpeakers.count == 1 ? "" : "s")")
-                }
-                Spacer()
-            }
+            DSMetaLine(parts: headerMeta)
 
             if !callSpeakers.isEmpty {
                 speakerStrip
+                    .padding(.top, DS.s4)
             }
         }
     }
 
-    private func metaChip(icon: String, text: String) -> some View {
-        Label(text, systemImage: icon)
-            .font(.caption)
-            .foregroundStyle(.secondary)
-            .padding(.horizontal, 8).padding(.vertical, 3)
-            .background(.background.secondary, in: Capsule())
+    private var headerMeta: [String] {
+        var parts = [call.startedAt.formatted(date: .abbreviated, time: .shortened)]
+        if let ended = call.endedAt {
+            parts.append(MeetingFormat.duration(call.startedAt, ended))
+        }
+        if let hostApp = call.app, !hostApp.isEmpty {
+            parts.append(hostApp)
+        }
+        if !callSpeakers.isEmpty {
+            parts.append("\(callSpeakers.count) speaker\(callSpeakers.count == 1 ? "" : "s")")
+        }
+        return parts
     }
 
     /// The people heard on this call as chips — click one to rename, merge, or
     /// split its voice. Replaces the old cramped disclosure list.
     private var speakerStrip: some View {
         ScrollView(.horizontal, showsIndicators: false) {
-            HStack(spacing: 6) {
+            HStack(spacing: DS.s6) {
                 ForEach(callSpeakers) { profile in
                     SpeakerChip(
                         profile: profile,
@@ -533,35 +515,36 @@ struct MeetingDetailView: View {
 
     private var summaryPane: some View {
         ScrollView {
-            VStack(alignment: .leading, spacing: 14) {
+            VStack(alignment: .leading, spacing: DS.s16) {
                 if let notes = call.notes, !notes.isEmpty {
                     MeetingNotesView(markdown: notes)
                 } else if app.isConsolidating {
-                    HStack(spacing: 8) {
+                    HStack(spacing: DS.s8) {
                         ProgressView().controlSize(.small)
-                        Text("Writing meeting notes…").font(.callout).foregroundStyle(.secondary)
+                        Text("Writing meeting notes…").font(.dsBody).foregroundStyle(.secondary)
                     }
                 } else if let summary = call.summary, !summary.isEmpty {
-                    Text(summary).font(.callout)
+                    Text(summary).font(.dsBody)
                 } else {
                     ContentUnavailableView("No notes for this meeting", systemImage: "note.text",
                                            description: Text("Notes are written when a call ends with a transcript."))
                 }
 
                 if let mine = call.userNotes, !mine.isEmpty {
-                    VStack(alignment: .leading, spacing: 6) {
-                        Label("My notes", systemImage: "pencil.line")
-                            .font(.callout.weight(.semibold))
+                    VStack(alignment: .leading, spacing: DS.s6) {
+                        DSSectionLabel(text: "My notes")
                         Text(mine)
-                            .font(.callout)
+                            .font(.dsBody)
                             .textSelection(.enabled)
                     }
-                    .padding(12)
+                    .padding(DS.s12)
                     .frame(maxWidth: .infinity, alignment: .leading)
-                    .background(.background.secondary, in: RoundedRectangle(cornerRadius: 10))
+                    .background(DS.surface,
+                                in: RoundedRectangle(cornerRadius: DS.rMedium, style: .continuous))
                 }
             }
-            .padding(20)
+            .padding(DS.s24)
+            .frame(maxWidth: 720, alignment: .leading)
             .frame(maxWidth: .infinity, alignment: .leading)
         }
     }
@@ -570,14 +553,14 @@ struct MeetingDetailView: View {
 
     private var actionsPane: some View {
         ScrollView {
-            VStack(alignment: .leading, spacing: 14) {
+            VStack(alignment: .leading, spacing: DS.s20) {
                 if decisions.isEmpty && followUps.isEmpty {
                     ContentUnavailableView("No actions from this meeting", systemImage: "checklist",
                                            description: Text("Action items and follow-ups detected on a call show up here."))
                 }
                 if !decisions.isEmpty {
-                    VStack(alignment: .leading, spacing: 6) {
-                        Text("Action items").font(.callout.weight(.semibold))
+                    VStack(alignment: .leading, spacing: DS.s8) {
+                        DSSectionLabel(text: "Action items")
                         ForEach(decisions) { decision in
                             actionRow(icon: "checklist",
                                       title: decision.summary,
@@ -587,8 +570,8 @@ struct MeetingDetailView: View {
                     }
                 }
                 if !followUps.isEmpty {
-                    VStack(alignment: .leading, spacing: 6) {
-                        Text("Follow-ups").font(.callout.weight(.semibold))
+                    VStack(alignment: .leading, spacing: DS.s8) {
+                        DSSectionLabel(text: "Follow-ups")
                         ForEach(followUps) { followUp in
                             actionRow(icon: "bell",
                                       title: followUp.title,
@@ -598,34 +581,31 @@ struct MeetingDetailView: View {
                     }
                 }
             }
-            .padding(20)
+            .padding(DS.s24)
+            .frame(maxWidth: 720, alignment: .leading)
             .frame(maxWidth: .infinity, alignment: .leading)
         }
     }
 
     private func actionRow(icon: String, title: String, detail: String?,
                            badge: (String, Color)) -> some View {
-        HStack(alignment: .top, spacing: 10) {
+        HStack(alignment: .top, spacing: DS.s12) {
             Image(systemName: icon)
                 .foregroundStyle(Color.brand)
                 .frame(width: 18)
-                .padding(.top, 2)
-            VStack(alignment: .leading, spacing: 2) {
-                Text(title).font(.callout)
+                .padding(.top, DS.s2)
+            VStack(alignment: .leading, spacing: DS.s2) {
+                Text(title).font(.dsBody)
                 if let detail, !detail.isEmpty {
-                    Text(detail).font(.caption).foregroundStyle(.tertiary).lineLimit(2)
+                    Text(detail).font(.dsMeta).foregroundStyle(.tertiary).lineLimit(2)
                 }
             }
             Spacer()
-            Text(badge.0)
-                .font(.caption2.weight(.semibold))
-                .padding(.horizontal, 7).padding(.vertical, 2)
-                .background(badge.1.opacity(0.15), in: Capsule())
-                .foregroundStyle(badge.1)
+            DSChip(text: badge.0, tint: badge.1)
         }
-        .padding(10)
+        .padding(DS.s12)
         .frame(maxWidth: .infinity, alignment: .leading)
-        .background(.background.secondary, in: RoundedRectangle(cornerRadius: 8))
+        .background(DS.surface, in: RoundedRectangle(cornerRadius: DS.rMedium, style: .continuous))
     }
 
     private func decisionBadge(_ status: DecisionStatus) -> (String, Color) {
@@ -657,24 +637,26 @@ struct MeetingDetailView: View {
                                        description: Text("No transcript segments were saved for this call."))
             } else {
                 ScrollView {
-                    LazyVStack(alignment: .leading, spacing: 5) {
+                    LazyVStack(alignment: .leading, spacing: DS.s6) {
                         ForEach(segments) { segment in
-                            HStack(alignment: .top, spacing: 6) {
+                            HStack(alignment: .top, spacing: DS.s6) {
                                 Text(wallClock(segment.t0))
-                                    .font(.system(.caption2, design: .monospaced))
+                                    .font(.system(size: 11, design: .monospaced))
                                     .foregroundStyle(.tertiary)
                                 Text(segment.speakerLabel)
-                                    .font(.caption2.weight(.semibold))
+                                    .font(.system(size: 11, weight: .semibold))
                                     .foregroundStyle(TranscriptFormatter.color(for: segment))
                                     .frame(width: 76, alignment: .leading)
                                 Text(segment.text)
-                                    .font(.caption)
+                                    .font(.system(size: 12))
                                     .textSelection(.enabled)
                                     .frame(maxWidth: .infinity, alignment: .leading)
                             }
                         }
                     }
-                    .padding(20)
+                    .padding(DS.s24)
+                    .frame(maxWidth: 760, alignment: .leading)
+                    .frame(maxWidth: .infinity, alignment: .leading)
                 }
             }
         }
@@ -724,6 +706,7 @@ struct SpeakerChip: View {
     var onDetach: () -> Void
 
     @State private var editing = false
+    @State private var hovering = false
     @State private var draft = ""
 
     var body: some View {
@@ -731,22 +714,25 @@ struct SpeakerChip: View {
             draft = profile.name ?? ""
             editing = true
         } label: {
-            HStack(spacing: 5) {
+            HStack(spacing: DS.s4 + 1) {
                 Circle()
                     .fill(TranscriptFormatter.color(forSpeakerID: profile.id.uuidString))
                     .frame(width: 8, height: 8)
-                Text(profile.displayLabel).font(.caption.weight(.medium))
+                Text(profile.displayLabel).font(.system(size: 11, weight: .medium))
             }
-            .padding(.horizontal, 9).padding(.vertical, 4)
-            .background(.background.secondary, in: Capsule())
+            .padding(.horizontal, DS.s8 + 1)
+            .padding(.vertical, DS.s4)
+            .background(hovering ? DS.surfaceHover : DS.surface, in: Capsule())
             .contentShape(Capsule())
         }
         .buttonStyle(.plain)
+        .onHover { hovering = $0 }
+        .animation(.easeOut(duration: 0.12), value: hovering)
         .help("Rename, merge, or split this voice")
         .popover(isPresented: $editing, arrowEdge: .bottom) {
-            VStack(alignment: .leading, spacing: 10) {
-                Text("Who is this?").font(.callout.weight(.semibold))
-                HStack(spacing: 6) {
+            VStack(alignment: .leading, spacing: DS.s12) {
+                Text("Who is this?").font(.dsRowTitle)
+                HStack(spacing: DS.s6) {
                     TextField("Name", text: $draft)
                         .textFieldStyle(.roundedBorder)
                         .frame(width: 170)
@@ -754,7 +740,7 @@ struct SpeakerChip: View {
                     Button("Save", action: commit)
                         .disabled(draft.trimmingCharacters(in: .whitespaces).isEmpty)
                 }
-                HStack(spacing: 8) {
+                HStack(spacing: DS.s8) {
                     if profile.isNamed {
                         Button("Clear name") { onRename(nil); editing = false }
                             .controlSize(.small)
@@ -774,9 +760,9 @@ struct SpeakerChip: View {
                         .help("Wrong person? Move this call's voice to a new, separate speaker")
                 }
                 Text("\(profile.sampleCount) utterances · a name sticks to this voice across calls")
-                    .font(.caption2).foregroundStyle(.tertiary)
+                    .font(.dsMeta).foregroundStyle(.tertiary)
             }
-            .padding(14)
+            .padding(DS.s16)
         }
     }
 
