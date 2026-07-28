@@ -159,6 +159,11 @@ final class ContextStore: @unchecked Sendable {
         migrator.registerMigration("v6-call-notes") { db in
             try db.execute(sql: "ALTER TABLE calls ADD COLUMN notes TEXT")
         }
+        // v7 — the user's OWN notes typed during the call (the call-notes
+        // window), separate from the AI-written meeting notes.
+        migrator.registerMigration("v7-user-notes") { db in
+            try db.execute(sql: "ALTER TABLE calls ADD COLUMN user_notes TEXT")
+        }
         try migrator.migrate(dbQueue)
     }
 
@@ -247,6 +252,22 @@ final class ContextStore: @unchecked Sendable {
         }
     }
 
+    /// The user's own typed notes for a call (autosaved from the call window).
+    func updateCallUserNotes(_ id: UUID, text: String) throws {
+        try dbQueue.write { db in
+            try db.execute(sql: "UPDATE calls SET user_notes = ? WHERE id = ?",
+                           arguments: [text, id.uuidString])
+        }
+    }
+
+    func callUserNotes(_ id: UUID) throws -> String {
+        try dbQueue.read { db in
+            let row = try Row.fetchOne(db, sql: "SELECT user_notes FROM calls WHERE id = ?",
+                                       arguments: [id.uuidString])
+            return row?["user_notes"] as String? ?? ""
+        }
+    }
+
     // MARK: - Calls (browsing)
 
     struct CallRecord: Identifiable {
@@ -256,12 +277,13 @@ final class ContextStore: @unchecked Sendable {
         let app: String?
         let summary: String?
         var notes: String?
+        var userNotes: String?
     }
 
     func listCalls(limit: Int = 200) throws -> [CallRecord] {
         try dbQueue.read { db in
             let rows = try Row.fetchAll(db, sql: """
-                SELECT id, started_at, ended_at, app, summary, notes FROM calls
+                SELECT id, started_at, ended_at, app, summary, notes, user_notes FROM calls
                 ORDER BY started_at DESC LIMIT ?
                 """, arguments: [limit])
             return rows.compactMap { row in
@@ -273,7 +295,8 @@ final class ContextStore: @unchecked Sendable {
                     endedAt: ended.map(Date.init(timeIntervalSince1970:)),
                     app: row["app"] as String?,
                     summary: row["summary"] as String?,
-                    notes: row["notes"] as String?)
+                    notes: row["notes"] as String?,
+                    userNotes: row["user_notes"] as String?)
             }
         }
     }

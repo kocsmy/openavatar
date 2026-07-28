@@ -120,4 +120,15 @@ final class CallDetectionTests: XCTestCase {
         let call = try XCTUnwrap(store.listCalls(limit: 1).first)
         XCTAssertEqual(call.app, "Google Meet")
     }
+
+    func testUserNotesRoundTrip() throws {
+        // The call window's own-notes scratchpad autosaves onto the call.
+        let store = try ContextStore(inMemory: true)
+        let callID = try store.startCall(app: "Zoom")
+        XCTAssertEqual(try store.callUserNotes(callID), "")
+        try store.updateCallUserNotes(callID, text: "- ask Ben about pricing")
+        XCTAssertEqual(try store.callUserNotes(callID), "- ask Ben about pricing")
+        let record = try XCTUnwrap(store.listCalls(limit: 1).first)
+        XCTAssertEqual(record.userNotes, "- ask Ben about pricing")
+    }
 }

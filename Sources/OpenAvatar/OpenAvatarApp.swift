@@ -69,29 +69,49 @@ final class WindowManager {
         }
     }
 
+    /// The per-call notes + live transcript window. With focus: false it
+    /// appears behind the active app (the call) instead of stealing focus.
+    func showCallWindow(focus: Bool = true) {
+        show(id: "call", title: "Call notes",
+             size: NSSize(width: 700, height: 620), focus: focus) {
+            CallNotesWindowView()
+                .environmentObject(AppState.shared)
+                .environmentObject(SettingsStore.shared)
+        }
+    }
+
     func close(id: String) {
         windows[id]?.close()
         windows[id] = nil
     }
 
     private func show<Content: View>(id: String, title: String, size: NSSize,
+                                     focus: Bool = true,
                                      @ViewBuilder content: () -> Content) {
         if let existing = windows[id] {
-            existing.makeKeyAndOrderFront(nil)
-            NSApp.activate(ignoringOtherApps: true)
+            if focus {
+                existing.makeKeyAndOrderFront(nil)
+                NSApp.activate(ignoringOtherApps: true)
+            } else {
+                existing.orderFront(nil)
+            }
             return
         }
         let window = NSWindow(
             contentRect: NSRect(origin: .zero, size: size),
-            styleMask: [.titled, .closable, .miniaturizable],
+            styleMask: [.titled, .closable, .miniaturizable, .resizable],
             backing: .buffered, defer: false)
         window.title = title
         window.isReleasedWhenClosed = false
         window.center()
         window.contentView = NSHostingView(rootView: content())
         windows[id] = window
-        window.makeKeyAndOrderFront(nil)
-        NSApp.activate(ignoringOtherApps: true)
+        if focus {
+            window.makeKeyAndOrderFront(nil)
+            NSApp.activate(ignoringOtherApps: true)
+        } else {
+            window.orderFront(nil)
+        }
     }
 }
 #endif

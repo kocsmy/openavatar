@@ -11,10 +11,10 @@ import XCTest
 final class PopoverContentTests: XCTestCase {
 
     private func content(callSuggestion: Bool = false, error: Bool = false,
-                         suggestions: Int = 0, approvals: Int = 0,
+                         upcoming: Int = 0, suggestions: Int = 0, approvals: Int = 0,
                          detected: Int = 0, executed: Int = 0) -> PopoverContent {
         PopoverContent(hasCallSuggestion: callSuggestion, hasError: error,
-                       suggestions: suggestions, approvals: approvals,
+                       upcoming: upcoming, suggestions: suggestions, approvals: approvals,
                        detected: detected, executed: executed)
     }
 
@@ -37,11 +37,20 @@ final class PopoverContentTests: XCTestCase {
     // MARK: Populated states
 
     func testSectionOrderIsStable() {
-        let c = content(callSuggestion: true, error: true,
+        let c = content(callSuggestion: true, error: true, upcoming: 2,
                         suggestions: 1, approvals: 1, detected: 2, executed: 1)
         XCTAssertEqual(c.sections,
-                       [.callSuggestion, .error, .suggestions, .approvals, .detected, .executed])
+                       [.callSuggestion, .error, .upcoming, .suggestions,
+                        .approvals, .detected, .executed])
         XCTAssertFalse(c.isEmpty)
+    }
+
+    func testUpcomingMeetingsShowAlongsideEmptyState() {
+        // Meetings are informational — they must not hide the "not listening"
+        // explanation, and vice versa.
+        let c = content(upcoming: 3)
+        XCTAssertEqual(c.sections, [.upcoming, .empty])
+        XCTAssertTrue(c.isEmpty)
     }
 
     func testEmptyStateNeverCoexistsWithContent() {

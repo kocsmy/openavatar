@@ -3,17 +3,12 @@ import SwiftUI
 import AppKit
 #endif
 
-/// Menu-bar popover (spec §4.8): recording toggle, live "Detected this call"
-/// list, pending approvals, executed actions with Undo.
+/// Menu-bar popover, Granola-style: recording toggle, the next meetings, the
+/// last call's pending actions, and quick menu rows. The live transcript
+/// lives in the call window (CallNotesWindowView), not here.
 struct MenuBarView: View {
     @EnvironmentObject var app: AppState
     @EnvironmentObject var settings: SettingsStore
-
-    enum PopoverTab: String, CaseIterable {
-        case actions = "Actions"
-        case transcript = "Transcript"
-    }
-    @State private var tab: PopoverTab = .actions
 
     @Environment(\.openSettings) private var openSettings
 
@@ -25,26 +20,14 @@ struct MenuBarView: View {
                 .padding(.bottom, 10)
             Divider()
 
-            Picker("", selection: $tab) {
-                ForEach(PopoverTab.allCases, id: \.self) { Text($0.rawValue).tag($0) }
-            }
-            .pickerStyle(.segmented)
-            .labelsHidden()
-            .padding(.horizontal, 14)
-            .padding(.top, 12)
-            .padding(.bottom, 4)
-
-            // The content region is one CONSTANT height, for both tabs, in
-            // every state, so the menu-bar window has exactly one size and
-            // never resizes while open. MenuBarExtra windows resize
-            // unreliably when content changes mid-open — suggestions and the
-            // call banner arrive asynchronously and used to overlap the
-            // footer (and, earlier, tab switches left a gap under the icon).
-            // Whatever doesn't fit scrolls inside this region instead.
+            // The content region is one CONSTANT height in every state, so the
+            // menu-bar window has exactly one size and never resizes while
+            // open. MenuBarExtra windows resize unreliably when content
+            // changes mid-open — suggestions and the call banner arrive
+            // asynchronously and used to overlap the footer. Whatever doesn't
+            // fit scrolls inside this region instead.
             Group {
-                if tab == .transcript {
-                    LiveTranscriptView().padding(14)
-                } else if popoverContent.isEmpty {
+                if popoverContent.isEmpty {
                     actionsContent.padding(14)   // empty state centers itself
                 } else {
                     ScrollView { actionsContent.padding(14) }
@@ -54,24 +37,45 @@ struct MenuBarView: View {
             .clipped()   // even a mis-sized child can never draw over the footer
 
             Divider()
+            menuRows
+                .padding(.horizontal, 14)
+                .padding(.vertical, 8)
+            Divider()
             footer
                 .padding(.horizontal, 14)
                 .padding(.vertical, 10)
         }
         .frame(width: 420)
+        .onAppear { app.refreshUpcomingEvents() }
     }
 
-    // MARK: Actions tab
+    // MARK: Content
 
-    /// Single source of truth for what the Actions tab shows (see PopoverContent).
+    /// Single source of truth for what the content region shows (see PopoverContent).
     var popoverContent: PopoverContent {
         PopoverContent(
             hasCallSuggestion: app.suggestedCallApp != nil && !app.isListening,
             hasError: app.lastError != nil,
+            upcoming: upcomingSoon.count,
             suggestions: app.proactiveSuggestions.count,
             approvals: app.pendingApprovals.count,
             detected: app.detectedDecisions.count,
             executed: app.executedActions.count)
+    }
+
+    /// Today's and tomorrow's meetings that haven't ended yet (max 4).
+    private var upcomingSoon: [CalendarEvent] {
+        let now = Date()
+        let cal = Calendar.current
+        guard let cutoff = cal.date(byAdding: .day, value: 2, to: cal.startOfDay(for: now))
+        else { return [] }
+        return Array(app.upcomingEvents
+            .filter { event in
+                guard let start = event.start else { return false }
+                if let end = event.end, end < now { return false }
+                return start < cutoff
+            }
+            .prefix(4))
     }
 
     @ViewBuilder private var actionsContent: some View {
@@ -88,6 +92,10 @@ struct MenuBarView: View {
             callSuggestionBanner
         case .error:
             if let error = app.lastError { errorCard(error) }
+        case .upcoming:
+            section("Coming up") {
+                ForEach(upcomingSoon) { event in upcomingRow(event) }
+            }
         case .suggestions:
             section("Suggestions") {
                 boundedRows(app.proactiveSuggestions, rowHeight: 72) { suggestionRow($0) }
@@ -97,7 +105,7 @@ struct MenuBarView: View {
                 ForEach(app.pendingApprovals) { ApprovalCard(approval: $0) }
             }
         case .detected:
-            section("Detected this call") {
+            section(app.isListening ? "Detected this call" : "From your last call") {
                 boundedRows(app.detectedDecisions, rowHeight: 74) { DecisionRow(decision: $0) }
             }
         case .executed:
@@ -106,6 +114,29 @@ struct MenuBarView: View {
             }
         case .empty:
             emptyState
+        }
+    }
+
+    private func upcomingRow(_ event: CalendarEvent) -> some View {
+        HStack(spacing: 10) {
+            VStack(alignment: .leading, spacing: 0) {
+                if let start = event.start {
+                    Text(start.formatted(date: .omitted, time: .shortened))
+                        .font(.caption.weight(.semibold)).monospacedDigit()
+                    Text(Calendar.current.isDateInToday(start) ? "Today" : "Tomorrow")
+                        .font(.caption2).foregroundStyle(.tertiary)
+                }
+            }
+            .frame(width: 62, alignment: .leading)
+            Text(event.title).font(.callout).lineLimit(1)
+            Spacer()
+            if let service = event.conferenceService {
+                Text(service)
+                    .font(.caption2)
+                    .padding(.horizontal, 6).padding(.vertical, 1)
+                    .background(Color.accentColor.opacity(0.12), in: Capsule())
+                    .foregroundStyle(Color.accentColor)
+            }
         }
     }
 
@@ -250,6 +281,44 @@ struct MenuBarView: View {
         return app.systemAudioActive ? "Listening · mic + call audio" : "Listening · mic"
     }
 
+    /// Granola-style quick rows between content and the mode footer.
+    private var menuRows: some View {
+        VStack(alignment: .leading, spacing: 2) {
+            menuRow("Open OpenAvatar", icon: "macwindow") { openSettingsAndFocus() }
+            menuRow("Call notes & transcript", icon: "note.text") {
+#if canImport(AppKit)
+                WindowManager.shared.showCallWindow()
+#endif
+            }
+            HStack(spacing: 8) {
+                Text("v\(UpdateManager.shared.currentVersion)")
+                    .font(.caption2).foregroundStyle(.tertiary)
+                Spacer()
+                Button("Check for updates") { UpdateManager.shared.checkForUpdates() }
+                    .buttonStyle(.borderless)
+                    .font(.caption)
+            }
+            .padding(.horizontal, 6)
+            .padding(.top, 4)
+        }
+    }
+
+    private func menuRow(_ title: String, icon: String, action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            HStack(spacing: 8) {
+                Image(systemName: icon)
+                    .frame(width: 18)
+                    .foregroundStyle(.secondary)
+                Text(title).font(.callout)
+                Spacer()
+            }
+            .contentShape(Rectangle())
+            .padding(.horizontal, 6)
+            .padding(.vertical, 5)
+        }
+        .buttonStyle(.plain)
+    }
+
     private var footer: some View {
         HStack(spacing: 10) {
             Text("Mode").font(.caption).foregroundStyle(.secondary)
@@ -337,27 +406,30 @@ enum PopoverLayout {
     static let contentHeight: CGFloat = 440
 }
 
-/// The ordered sections the Actions tab renders, in presentation order.
+/// The ordered sections the content region renders, in presentation order.
 enum PopoverSection: String, Equatable {
-    case callSuggestion, error, suggestions, approvals, detected, executed, empty
+    case callSuggestion, error, upcoming, suggestions, approvals, detected, executed, empty
 }
 
-/// Pure view-model for the Actions tab: which sections show and whether the
-/// empty state applies. The view renders straight from this, so
-/// `PopoverContentTests` snapshots exactly what the user sees. (Non-empty
-/// content always lives in a ScrollView inside the constant-height region,
-/// so "does it scroll" is no longer a decision anything can get wrong.)
+/// Pure view-model for the popover content: which sections show and whether
+/// the empty state applies. The view renders straight from this, so
+/// `PopoverContentTests` snapshots exactly what the user sees. Upcoming
+/// meetings are informational — they show alongside the empty state rather
+/// than suppressing it. (Non-empty content always lives in a ScrollView
+/// inside the constant-height region, so "does it scroll" is no longer a
+/// decision anything can get wrong.)
 struct PopoverContent: Equatable {
     let sections: [PopoverSection]
     let isEmpty: Bool
 
-    init(hasCallSuggestion: Bool, hasError: Bool,
+    init(hasCallSuggestion: Bool, hasError: Bool, upcoming: Int,
          suggestions: Int, approvals: Int, detected: Int, executed: Int) {
         let empty = !hasError && suggestions == 0 && approvals == 0
             && detected == 0 && executed == 0
         var s: [PopoverSection] = []
         if hasCallSuggestion { s.append(.callSuggestion) }
         if hasError { s.append(.error) }
+        if upcoming > 0 { s.append(.upcoming) }
         if suggestions > 0 { s.append(.suggestions) }
         if approvals > 0 { s.append(.approvals) }
         if detected > 0 { s.append(.detected) }

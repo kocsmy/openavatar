@@ -223,6 +223,11 @@ enum TranscriptFormatter {
             lines.append("")
             lines.append(notes)
         }
+        if let mine = call.userNotes, !mine.isEmpty {
+            lines.append("")
+            lines.append("## My notes")
+            lines.append(mine)
+        }
         lines.append("")
         lines.append(plainText(segments, callStart: call.startedAt))
         return lines.joined(separator: "\n")
