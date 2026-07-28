@@ -118,7 +118,7 @@ actor GoogleOAuth {
             throw GoogleOAuthError.listenerFailed("could not build auth URL")
         }
 
-        await MainActor.run { NSWorkspace.shared.open(authURL) }
+        _ = await MainActor.run { NSWorkspace.shared.open(authURL) }
 
         let code: String
         do {

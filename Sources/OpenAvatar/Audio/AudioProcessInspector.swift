@@ -90,12 +90,15 @@ enum AudioProcessInspector {
             mSelector: kAudioProcessPropertyBundleID,
             mScope: kAudioObjectPropertyScopeGlobal,
             mElement: kAudioObjectPropertyElementMain)
-        var value: CFString = "" as CFString
-        var size = UInt32(MemoryLayout<CFString>.size)
-        guard AudioObjectGetPropertyData(object, &address, 0, nil, &size, &value) == noErr else {
-            return nil
+        // The property returns a +1 CFString by reference; going through
+        // Unmanaged keeps ARC's hands off the raw pointer the C API fills in.
+        var value: Unmanaged<CFString>?
+        var size = UInt32(MemoryLayout<Unmanaged<CFString>?>.size)
+        let status = withUnsafeMutablePointer(to: &value) { pointer in
+            AudioObjectGetPropertyData(object, &address, 0, nil, &size, pointer)
         }
-        let s = value as String
+        guard status == noErr, let cf = value?.takeRetainedValue() else { return nil }
+        let s = cf as String
         return s.isEmpty ? nil : s
     }
 #endif
