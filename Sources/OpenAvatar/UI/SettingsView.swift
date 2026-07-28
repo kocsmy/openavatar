@@ -167,22 +167,22 @@ struct TranscriptionSettingsTab: View {
     var body: some View {
         Form {
             Section("Engine") {
-                Picker("Transcription", selection: $settings.transcriptionMode) {
-                    ForEach(TranscriptionMode.allCases, id: \.self) { Text($0.displayName).tag($0) }
-                }
-                .pickerStyle(.radioGroup)
-                switch settings.transcriptionMode {
-                case .local:
-                    Text("whisper.cpp on your Mac — private and fully offline. The widest language coverage (99); pick the model quality below.")
-                        .font(.caption).foregroundStyle(.secondary)
-                case .parakeet:
-                    Text("NVIDIA Parakeet on the Apple Neural Engine — also fully on-device and offline, several times faster than Whisper and more accurate for its 25 languages (English, Hungarian, most European languages, Japanese).")
-                        .font(.caption).foregroundStyle(.secondary)
-                case .cloud:
-                    Label("Call audio will be sent to the configured cloud provider.",
-                          systemImage: "exclamationmark.triangle")
-                        .font(.caption)
-                        .foregroundStyle(.orange)
+                VStack(spacing: 8) {
+                    EngineCard(
+                        mode: .parakeet, selection: $settings.transcriptionMode,
+                        title: "Parakeet V3", badge: parakeetBadge,
+                        specs: "5× faster · Most accurate · 25 languages · On-device · ~600 MB",
+                        guidance: "Recommended for most calls — English, Hungarian, and most European languages, on the Neural Engine, fully offline.")
+                    EngineCard(
+                        mode: .local, selection: $settings.transcriptionMode,
+                        title: "Whisper", badge: whisperBadge,
+                        specs: "1× speed · 99 languages · On-device · 150 MB – 1.6 GB",
+                        guidance: "Use for languages outside Parakeet's 25 — the widest coverage there is. Pick the model quality below.")
+                    EngineCard(
+                        mode: .cloud, selection: $settings.transcriptionMode,
+                        title: "Cloud", badge: cloudBadge,
+                        specs: "Provider-dependent · Bring your own key · Audio leaves your Mac",
+                        guidance: "Use only if you specifically want a cloud provider's engine — the on-device options keep calls private.")
                 }
             }
 
@@ -242,6 +242,26 @@ struct TranscriptionSettingsTab: View {
         .onAppear { app.refreshParakeetState() }
     }
 
+    // Live status chips on the engine cards.
+
+    private var parakeetBadge: (String, Color) {
+        switch app.parakeetState {
+        case .ready: return ("Ready", .green)
+        case .preparing: return ("Downloading…", .orange)
+        case .failed: return ("Setup failed", .red)
+        case .idle: return ("600 MB download", .secondary)
+        }
+    }
+
+    private var whisperBadge: (String, Color) {
+        WhisperSetupService.isReady(settings: settings)
+            ? ("Installed", .green) : ("Setup needed", .orange)
+    }
+
+    private var cloudBadge: (String, Color) {
+        sttKeySaved ? ("Key saved", .green) : ("BYO key", .secondary)
+    }
+
     @ViewBuilder private var parakeetSetup: some View {
         switch app.parakeetState {
         case .ready:
@@ -268,6 +288,58 @@ struct TranscriptionSettingsTab: View {
         }
         Text("Language is detected automatically among Parakeet's 25. For calls in languages outside that set, switch to Whisper — it covers 99.")
             .font(.caption).foregroundStyle(.secondary)
+    }
+}
+
+/// One selectable engine card: title + live status chip, a spec line, and
+/// guidance on when to pick it. The whole card is the radio button.
+struct EngineCard: View {
+    let mode: TranscriptionMode
+    @Binding var selection: TranscriptionMode
+    let title: String
+    let badge: (String, Color)
+    let specs: String
+    let guidance: String
+
+    private var isSelected: Bool { selection == mode }
+
+    var body: some View {
+        Button {
+            selection = mode
+        } label: {
+            HStack(alignment: .top, spacing: 10) {
+                Image(systemName: isSelected ? "inset.filled.circle" : "circle")
+                    .foregroundStyle(isSelected ? Color.brand : Color.secondary)
+                    .padding(.top, 2)
+                VStack(alignment: .leading, spacing: 3) {
+                    HStack(spacing: 8) {
+                        Text(title).font(.callout.weight(.semibold))
+                        Text(badge.0)
+                            .font(.caption2.weight(.semibold))
+                            .padding(.horizontal, 7).padding(.vertical, 1.5)
+                            .background(badge.1.opacity(0.15), in: Capsule())
+                            .foregroundStyle(badge.1)
+                    }
+                    Text(specs)
+                        .font(.caption).foregroundStyle(.secondary)
+                    Text(guidance)
+                        .font(.caption).foregroundStyle(.tertiary)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+                Spacer(minLength: 0)
+            }
+            .padding(12)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background(
+                RoundedRectangle(cornerRadius: 10)
+                    .fill(isSelected ? Color.brand.opacity(0.08) : Color.clear))
+            .overlay(
+                RoundedRectangle(cornerRadius: 10)
+                    .stroke(isSelected ? Color.brand : Color.secondary.opacity(0.25),
+                            lineWidth: isSelected ? 1.5 : 1))
+            .contentShape(RoundedRectangle(cornerRadius: 10))
+        }
+        .buttonStyle(.plain)
     }
 }
 
