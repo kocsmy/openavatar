@@ -46,6 +46,7 @@ struct MenuBarView: View {
                 .padding(.vertical, 10)
         }
         .frame(width: 420)
+        .tint(.brand)
         .onAppear { app.refreshUpcomingEvents() }
     }
 
@@ -98,7 +99,7 @@ struct MenuBarView: View {
             }
         case .suggestions:
             section("Suggestions") {
-                boundedRows(app.proactiveSuggestions, rowHeight: 72) { suggestionRow($0) }
+                boundedRows(app.proactiveSuggestions, rowHeight: 88) { suggestionRow($0) }
             }
         case .approvals:
             section("Waiting for your approval") {
@@ -106,7 +107,7 @@ struct MenuBarView: View {
             }
         case .detected:
             section(app.isListening ? "Detected this call" : "From your last call") {
-                boundedRows(app.detectedDecisions, rowHeight: 74) { DecisionRow(decision: $0) }
+                boundedRows(app.detectedDecisions, rowHeight: 92) { DecisionRow(decision: $0) }
             }
         case .executed:
             section("Executed") {
@@ -120,42 +121,36 @@ struct MenuBarView: View {
     /// One upcoming meeting. The whole row opens the meeting's notes page —
     /// pre-write your notes there; they carry into the call when it starts.
     private func upcomingRow(_ event: CalendarEvent) -> some View {
-        Button {
+        DSRow(style: .ghost) {
             app.openEventNotes(event)
-        } label: {
-            HStack(spacing: 10) {
+        } content: {
+            HStack(spacing: DS.s8 + 2) {
                 VStack(alignment: .leading, spacing: 0) {
                     if let start = event.start {
                         Text(start.formatted(date: .omitted, time: .shortened))
                             .font(.caption.weight(.semibold)).monospacedDigit()
                         Text(Calendar.current.isDateInToday(start) ? "Today" : "Tomorrow")
-                            .font(.caption2).foregroundStyle(.tertiary)
+                            .font(.dsMeta).foregroundStyle(.tertiary)
                     }
                 }
                 .frame(width: 62, alignment: .leading)
                 VStack(alignment: .leading, spacing: 1) {
-                    Text(event.title).font(.callout).lineLimit(1)
+                    Text(event.title).font(.dsRowTitle).lineLimit(1)
                     if let who = event.participantSummary(excludingSelfEmail: settings.calendarSelfEmail) {
-                        Text(who).font(.caption2).foregroundStyle(.tertiary).lineLimit(1)
+                        Text(who).font(.dsMeta).foregroundStyle(.tertiary).lineLimit(1)
                     }
                 }
-                Spacer(minLength: 8)
+                Spacer(minLength: DS.s8)
                 if let service = event.conferenceService {
-                    Text(service)
-                        .font(.caption2)
-                        .padding(.horizontal, 6).padding(.vertical, 1)
-                        .background(Color.accentColor.opacity(0.12), in: Capsule())
-                        .foregroundStyle(Color.accentColor)
+                    DSChip(text: service)
                 }
                 Image(systemName: "chevron.right")
-                    .font(.caption2)
+                    .font(.dsMeta)
                     .foregroundStyle(.quaternary)
             }
-            .contentShape(Rectangle())
-            .padding(.horizontal, 6)
-            .padding(.vertical, 4)
+            .padding(.horizontal, DS.s8)
+            .padding(.vertical, DS.s6)
         }
-        .buttonStyle(.plain)
         .help("Open this meeting's notes — write yours before the call starts")
     }
 
@@ -164,22 +159,21 @@ struct MenuBarView: View {
     @ViewBuilder private var callSuggestionBanner: some View {
         if let suggestion = app.suggestedCallApp, !app.isListening {
             HStack(spacing: 10) {
-                Image(systemName: "phone.badge.waveform")
-                    .foregroundStyle(Color.accentColor)
-                    .font(.title3)
+                DSIconPlate(systemName: "phone.badge.waveform", tint: .brand, size: 30)
                 VStack(alignment: .leading, spacing: 1) {
                     Text("\(suggestion) looks active").font(.caption.weight(.semibold))
                     Text("Start listening for this call?")
-                        .font(.caption2).foregroundStyle(.secondary)
+                        .font(.dsMeta).foregroundStyle(.secondary)
                 }
                 Spacer()
                 Button("Start") { app.startListening() }
                     .controlSize(.small)
                     .buttonStyle(.borderedProminent)
+                    .tint(.brand)
             }
             .padding(10)
-            .background(Color.accentColor.opacity(0.10),
-                        in: RoundedRectangle(cornerRadius: 8, style: .continuous))
+            .background(Color.brand.opacity(0.09),
+                        in: RoundedRectangle(cornerRadius: DS.rMedium, style: .continuous))
         }
     }
 
@@ -243,8 +237,8 @@ struct MenuBarView: View {
         HStack(alignment: .top, spacing: 8) {
             Image(systemName: "lightbulb").foregroundStyle(.yellow)
             VStack(alignment: .leading, spacing: 2) {
-                Text(suggestion.title).font(.callout)
-                Text(suggestion.rationale).font(.caption2)
+                Text(suggestion.title).font(.dsBody)
+                Text(suggestion.rationale).font(.dsMeta)
                     .foregroundStyle(.tertiary).lineLimit(2)
             }
             Spacer()
@@ -254,6 +248,8 @@ struct MenuBarView: View {
             }
             .buttonStyle(.borderless)
         }
+        .padding(DS.s8 + 2)
+        .background(DS.surface, in: RoundedRectangle(cornerRadius: DS.rMedium, style: .continuous))
     }
 
     // MARK: Header / footer
@@ -278,21 +274,16 @@ struct MenuBarView: View {
                     .frame(minWidth: 52)
             }
             .buttonStyle(.borderedProminent)
-            .tint(app.isListening ? .red : .accentColor)
+            .tint(app.isListening ? .red : .brand)
             .controlSize(.large)
             .keyboardShortcut("l", modifiers: [.command, .shift])
         }
     }
 
     private var statusChip: some View {
-        ZStack {
-            RoundedRectangle(cornerRadius: 10, style: .continuous)
-                .fill(app.isListening ? Color.red.opacity(0.14) : Color.secondary.opacity(0.12))
-                .frame(width: 38, height: 38)
-            Image(systemName: app.isListening ? "waveform" : "waveform.slash")
-                .font(.system(size: 16, weight: .semibold))
-                .foregroundStyle(app.isListening ? Color.red : Color.secondary)
-        }
+        DSIconPlate(systemName: app.isListening ? "waveform" : "waveform.slash",
+                    tint: app.isListening ? .red : .secondary,
+                    size: 38)
     }
 
     private var statusText: String {
@@ -323,19 +314,17 @@ struct MenuBarView: View {
     }
 
     private func menuRow(_ title: String, icon: String, action: @escaping () -> Void) -> some View {
-        Button(action: action) {
-            HStack(spacing: 8) {
+        DSRow(style: .ghost, action: action) {
+            HStack(spacing: DS.s8) {
                 Image(systemName: icon)
                     .frame(width: 18)
                     .foregroundStyle(.secondary)
-                Text(title).font(.callout)
+                Text(title).font(.dsBody)
                 Spacer()
             }
-            .contentShape(Rectangle())
-            .padding(.horizontal, 6)
-            .padding(.vertical, 5)
+            .padding(.horizontal, DS.s8)
+            .padding(.vertical, DS.s6)
         }
-        .buttonStyle(.plain)
     }
 
     private var footer: some View {
@@ -407,10 +396,7 @@ struct MenuBarView: View {
     }
 
     private func sectionTitle(_ text: String) -> some View {
-        Text(text.uppercased())
-            .font(.caption2.weight(.semibold))
-            .foregroundStyle(.secondary)
-            .kerning(0.4)
+        DSSectionLabel(text: text)
     }
 }
 
@@ -508,6 +494,8 @@ struct DecisionRow: View {
             .fixedSize()
             .help("Dismiss with a reason")
         }
+        .padding(DS.s8 + 2)
+        .background(DS.surface, in: RoundedRectangle(cornerRadius: DS.rMedium, style: .continuous))
         .opacity(belowThreshold ? 0.6 : 1)
     }
 

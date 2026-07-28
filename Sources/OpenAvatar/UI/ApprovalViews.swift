@@ -1,10 +1,5 @@
 import SwiftUI
 
-extension Color {
-    /// OpenAvatar's warm coral brand accent (matches the app icon).
-    static let brand = Color(red: 0.82, green: 0.44, blue: 0.31)
-}
-
 /// Per-item approval card: preview (diff / message / ticket fields),
 /// Approve / Edit / Dismiss (spec §4.8).
 struct ApprovalCard: View {

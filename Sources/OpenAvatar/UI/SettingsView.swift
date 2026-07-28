@@ -53,34 +53,48 @@ struct SettingsView: View {
     var body: some View {
         HStack(spacing: 0) {
             sidebar
-                .frame(width: 190)
+                .frame(width: 200)
             Divider()
             detail
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
         }
-        .frame(width: 950, height: 660)
+        .frame(width: 960, height: 660)
+        .tint(.brand)
     }
 
     private var sidebar: some View {
-        List(selection: $section) {
-            sidebarRow(.home)
-            Section("Library") {
-                sidebarRow(.transcripts)
-                sidebarRow(.followUps)
-                sidebarRow(.metrics)
+        VStack(alignment: .leading, spacing: 0) {
+            // Wordmark: the one identity moment the window gets.
+            HStack(spacing: DS.s8 + 1) {
+                DSIconPlate(systemName: "waveform", tint: .brand, size: 26)
+                Text("OpenAvatar")
+                    .font(.system(size: 14, weight: .semibold))
+                Spacer()
             }
-            Section("Setup") {
-                sidebarRow(.general)
-                sidebarRow(.transcription)
-                sidebarRow(.models)
-                sidebarRow(.integrations)
-                sidebarRow(.trust)
-                sidebarRow(.memory)
-                sidebarRow(.data)
+            .padding(.horizontal, DS.s16)
+            .padding(.top, DS.s16)
+            .padding(.bottom, DS.s8)
+
+            List(selection: $section) {
+                sidebarRow(.home)
+                Section("Library") {
+                    sidebarRow(.transcripts)
+                    sidebarRow(.followUps)
+                    sidebarRow(.metrics)
+                }
+                Section("Setup") {
+                    sidebarRow(.general)
+                    sidebarRow(.transcription)
+                    sidebarRow(.models)
+                    sidebarRow(.integrations)
+                    sidebarRow(.trust)
+                    sidebarRow(.memory)
+                    sidebarRow(.data)
+                }
             }
+            .listStyle(.sidebar)
+            .scrollContentBackground(.hidden)
         }
-        .listStyle(.sidebar)
-        .scrollContentBackground(.hidden)
         .background(.background.secondary.opacity(0.5))
     }
 
