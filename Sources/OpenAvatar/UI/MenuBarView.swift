@@ -117,27 +117,46 @@ struct MenuBarView: View {
         }
     }
 
+    /// One upcoming meeting. The whole row opens the meeting's notes page —
+    /// pre-write your notes there; they carry into the call when it starts.
     private func upcomingRow(_ event: CalendarEvent) -> some View {
-        HStack(spacing: 10) {
-            VStack(alignment: .leading, spacing: 0) {
-                if let start = event.start {
-                    Text(start.formatted(date: .omitted, time: .shortened))
-                        .font(.caption.weight(.semibold)).monospacedDigit()
-                    Text(Calendar.current.isDateInToday(start) ? "Today" : "Tomorrow")
-                        .font(.caption2).foregroundStyle(.tertiary)
+        Button {
+            app.openEventNotes(event)
+        } label: {
+            HStack(spacing: 10) {
+                VStack(alignment: .leading, spacing: 0) {
+                    if let start = event.start {
+                        Text(start.formatted(date: .omitted, time: .shortened))
+                            .font(.caption.weight(.semibold)).monospacedDigit()
+                        Text(Calendar.current.isDateInToday(start) ? "Today" : "Tomorrow")
+                            .font(.caption2).foregroundStyle(.tertiary)
+                    }
                 }
-            }
-            .frame(width: 62, alignment: .leading)
-            Text(event.title).font(.callout).lineLimit(1)
-            Spacer()
-            if let service = event.conferenceService {
-                Text(service)
+                .frame(width: 62, alignment: .leading)
+                VStack(alignment: .leading, spacing: 1) {
+                    Text(event.title).font(.callout).lineLimit(1)
+                    if let who = event.participantSummary(excludingSelfEmail: settings.calendarSelfEmail) {
+                        Text(who).font(.caption2).foregroundStyle(.tertiary).lineLimit(1)
+                    }
+                }
+                Spacer(minLength: 8)
+                if let service = event.conferenceService {
+                    Text(service)
+                        .font(.caption2)
+                        .padding(.horizontal, 6).padding(.vertical, 1)
+                        .background(Color.accentColor.opacity(0.12), in: Capsule())
+                        .foregroundStyle(Color.accentColor)
+                }
+                Image(systemName: "chevron.right")
                     .font(.caption2)
-                    .padding(.horizontal, 6).padding(.vertical, 1)
-                    .background(Color.accentColor.opacity(0.12), in: Capsule())
-                    .foregroundStyle(Color.accentColor)
+                    .foregroundStyle(.quaternary)
             }
+            .contentShape(Rectangle())
+            .padding(.horizontal, 6)
+            .padding(.vertical, 4)
         }
+        .buttonStyle(.plain)
+        .help("Open this meeting's notes — write yours before the call starts")
     }
 
     private var isEmptyState: Bool { popoverContent.isEmpty }

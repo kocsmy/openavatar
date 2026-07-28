@@ -123,11 +123,14 @@ actor MemoryConsolidator {
         1. digest — a ≤120-word summary of this call: topics, decisions, outcomes, \
         who was involved.
         2. notes — structured meeting notes in Markdown, like a sharp colleague's \
-        minutes. One "## Topic" section per major topic discussed (2–6 sections), \
-        each with terse "- " bullets capturing the substance: concrete numbers, \
-        names, dates, decisions made, disagreements, and next steps. Prefer \
-        specifics over generalities ("churn at 3.2%, up from 2.8%" not "churn \
-        discussed"). No preamble, no filler bullets, nothing invented.
+        minutes. ALWAYS open with a "## Summary" section: 3–6 tight bullets \
+        covering what the meeting was about and what came out of it (outcomes, \
+        decisions, headline numbers). Then one "## Topic" section per major \
+        topic discussed (2–6 sections), each with terse "- " bullets capturing \
+        the substance: concrete numbers, names, dates, decisions made, \
+        disagreements, and next steps. Prefer specifics over generalities \
+        ("churn at 3.2%, up from 2.8%" not "churn discussed"). No preamble, no \
+        filler bullets, nothing invented.
         3. facts — durable knowledge worth remembering across calls, as operations:
            - add: a NEW fact not already in memory. Categories: identity (role/team), \
         preference (how they like things done), project (active work), person \
@@ -151,7 +154,7 @@ actor MemoryConsolidator {
             "properties": .object([
                 "digest": .object(["type": "string", "description": "≤120-word call summary"]),
                 "notes": .object(["type": "string",
-                                  "description": "Structured Markdown meeting notes: '## Topic' sections with '- ' detail bullets (numbers, names, decisions, next steps)"]),
+                                  "description": "Structured Markdown meeting notes: a '## Summary' section first (3-6 outcome bullets), then '## Topic' sections with '- ' detail bullets (numbers, names, decisions, next steps)"]),
                 "facts": .object([
                     "type": "array",
                     "items": .object([

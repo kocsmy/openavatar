@@ -13,7 +13,7 @@ enum MainSection: String, CaseIterable, Identifiable {
     var label: String {
         switch self {
         case .home: return "Home"
-        case .transcripts: return "Transcripts"
+        case .transcripts: return "Meetings"
         case .followUps: return "Follow-ups"
         case .metrics: return "Metrics"
         case .general: return "General"
@@ -29,7 +29,7 @@ enum MainSection: String, CaseIterable, Identifiable {
     var icon: String {
         switch self {
         case .home: return "house"
-        case .transcripts: return "text.quote"
+        case .transcripts: return "calendar.day.timeline.left"
         case .followUps: return "bell.badge"
         case .metrics: return "chart.bar"
         case .general: return "gearshape"
@@ -91,7 +91,7 @@ struct SettingsView: View {
     @ViewBuilder private var detail: some View {
         switch section {
         case .home: HomeTab()
-        case .transcripts: TranscriptsSettingsTab()
+        case .transcripts: MeetingsTab()
         case .followUps: FollowUpsSettingsTab()
         case .metrics: MetricsDashboardTab()
         case .general: GeneralSettingsTab()

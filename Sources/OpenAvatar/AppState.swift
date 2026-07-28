@@ -51,6 +51,9 @@ final class AppState: ObservableObject {
     @Published var callAttendees: [CalendarAttendee] = []
     /// Upcoming meetings for the Home "Coming up" view.
     @Published var upcomingEvents: [CalendarEvent] = []
+    /// Upcoming event whose notes the call window is showing BEFORE the call
+    /// exists (Granola-style: click a meeting, pre-write your notes).
+    @Published var previewEvent: CalendarEvent?
 
     /// Structured Markdown notes of the call currently shown in the review
     /// (arrives asynchronously from consolidation, a few seconds after the
@@ -206,6 +209,7 @@ final class AppState: ObservableObject {
         pendingFollowUps = []
         assignedAttendeeEmails = []
         reviewCallNotes = nil
+        previewEvent = nil   // the live call owns the notes window now
         sessionAutoStarted = auto
         do {
             // Label with whoever holds the mic right now; fall back to the
@@ -254,11 +258,35 @@ final class AppState: ObservableObject {
                 let event = try await calendar.currentEvent(calendarID: settings.calendarID)
                 currentEvent = event
                 callAttendees = event?.others(excludingSelfEmail: settings.calendarSelfEmail) ?? []
+                if let event { adoptEventContext(event) }
             } catch {
                 // Calendar is a convenience; surface but never disrupt the call.
                 reportError(error)
             }
         }
+    }
+
+    /// A live call just learned which calendar event it belongs to: stamp the
+    /// event's title on the record and let any notes pre-written for the event
+    /// seed the call's own notes. The call window switches from event preview
+    /// to the live call.
+    private func adoptEventContext(_ event: CalendarEvent) {
+        guard let callID = currentCallID, isListening else { return }
+        try? store.updateCallTitle(callID, title: event.title)
+        if let pre = try? store.eventNotes(eventID: event.id), !pre.isEmpty,
+           ((try? store.callUserNotes(callID)) ?? "").isEmpty {
+            try? store.updateCallUserNotes(callID, text: pre)
+        }
+        previewEvent = nil
+    }
+
+    /// Open the call window on an upcoming meeting so notes can be written
+    /// ahead of time (they carry into the call once it starts).
+    func openEventNotes(_ event: CalendarEvent) {
+        previewEvent = event
+#if canImport(AppKit)
+        WindowManager.shared.showCallWindow()
+#endif
     }
 
     /// Refresh the Home view's "Coming up" list. Best-effort.

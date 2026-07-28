@@ -104,49 +104,60 @@ struct HomeTab: View {
         .padding(.vertical, 6)
     }
 
+    /// The whole card opens the meeting's notes page — pre-write notes there;
+    /// they carry into the call once it starts.
     private func eventRow(_ event: CalendarEvent) -> some View {
-        HStack(alignment: .center, spacing: 10) {
-            RoundedRectangle(cornerRadius: 2)
-                .fill(Color.brand)
-                .frame(width: 3, height: 34)
-            VStack(alignment: .leading, spacing: 2) {
-                HStack(spacing: 6) {
-                    Text(event.title).font(.callout.weight(.medium))
-                    if isNow(event) {
-                        Text("Now")
-                            .font(.caption2.weight(.semibold))
-                            .padding(.horizontal, 6).padding(.vertical, 1)
-                            .background(Color.green.opacity(0.18), in: Capsule())
-                            .foregroundStyle(.green)
+        Button {
+            app.openEventNotes(event)
+        } label: {
+            HStack(alignment: .center, spacing: 10) {
+                RoundedRectangle(cornerRadius: 2)
+                    .fill(Color.brand)
+                    .frame(width: 3, height: 34)
+                VStack(alignment: .leading, spacing: 2) {
+                    HStack(spacing: 6) {
+                        Text(event.title).font(.callout.weight(.medium))
+                        if isNow(event) {
+                            Text("Now")
+                                .font(.caption2.weight(.semibold))
+                                .padding(.horizontal, 6).padding(.vertical, 1)
+                                .background(Color.green.opacity(0.18), in: Capsule())
+                                .foregroundStyle(.green)
+                        }
+                    }
+                    HStack(spacing: 6) {
+                        if let start = event.start {
+                            Text(timeRange(start, event.end))
+                                .font(.caption).foregroundStyle(.secondary)
+                        }
+                        if let service = event.conferenceService {
+                            Text(service)
+                                .font(.caption2)
+                                .padding(.horizontal, 6).padding(.vertical, 1)
+                                .background(Color.brand.opacity(0.12), in: Capsule())
+                                .foregroundStyle(Color.brand)
+                        }
+                        if let who = event.participantSummary(excludingSelfEmail: settings.calendarSelfEmail) {
+                            Label(who, systemImage: "person.2")
+                                .font(.caption2).foregroundStyle(.tertiary).lineLimit(1)
+                        }
                     }
                 }
-                HStack(spacing: 6) {
-                    if let start = event.start {
-                        Text(timeRange(start, event.end))
-                            .font(.caption).foregroundStyle(.secondary)
-                    }
-                    if let service = event.conferenceService {
-                        Text(service)
-                            .font(.caption2)
-                            .padding(.horizontal, 6).padding(.vertical, 1)
-                            .background(Color.brand.opacity(0.12), in: Capsule())
-                            .foregroundStyle(Color.brand)
-                    }
-                    let others = event.others(excludingSelfEmail: settings.calendarSelfEmail)
-                    if !others.isEmpty {
-                        Text("\(others.count) other\(others.count == 1 ? "" : "s")")
-                            .font(.caption2).foregroundStyle(.tertiary)
-                    }
+                Spacer()
+                if isNow(event) && !app.isListening {
+                    Button("Start notes") { app.startListening() }
+                        .controlSize(.small)
                 }
+                Image(systemName: "chevron.right")
+                    .font(.caption)
+                    .foregroundStyle(.quaternary)
             }
-            Spacer()
-            if isNow(event) && !app.isListening {
-                Button("Start notes") { app.startListening() }
-                    .controlSize(.small)
-            }
+            .padding(10)
+            .contentShape(RoundedRectangle(cornerRadius: 8))
+            .background(.background.secondary, in: RoundedRectangle(cornerRadius: 8))
         }
-        .padding(10)
-        .background(.background.secondary, in: RoundedRectangle(cornerRadius: 8))
+        .buttonStyle(.plain)
+        .help("Open this meeting's notes — write yours before the call starts")
     }
 
     private func isNow(_ event: CalendarEvent) -> Bool {
