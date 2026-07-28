@@ -244,7 +244,7 @@ final class AppState: ObservableObject {
         }
         Task {
             do {
-                let event = try await calendar.currentEvent()
+                let event = try await calendar.currentEvent(calendarID: settings.calendarID)
                 currentEvent = event
                 callAttendees = event?.others(excludingSelfEmail: settings.calendarSelfEmail) ?? []
             } catch {
@@ -261,7 +261,7 @@ final class AppState: ObservableObject {
             return
         }
         Task {
-            if let events = try? await calendar.upcomingEvents() {
+            if let events = try? await calendar.upcomingEvents(calendarID: settings.calendarID) {
                 upcomingEvents = events
             }
         }
@@ -280,6 +280,11 @@ final class AppState: ObservableObject {
                 conferenceService: currentEvent?.conferenceService)?.strongCallSignal == true)
         }
         sessionAutoStarted = false
+        // Qwen's bridge holds ~4 GB; keep it warm only while it's the active
+        // engine — otherwise release it now that the call is over.
+        if settings.transcriptionMode != .qwen {
+            Task { await Qwen3Transcriber.shared.shutdown() }
+        }
 
         let callID = currentCallID
         let callStart = currentCallStartedAt
@@ -670,6 +675,8 @@ final class AppState: ObservableObject {
                                            prompt: prompt)
         case .parakeet:
             return ParakeetTranscriber.shared   // long-lived: models load once
+        case .qwen:
+            return Qwen3Transcriber.shared      // long-lived: bridge stays resident
         case .cloud:
             let key = KeychainStore.shared.get(.cloudSTTAPIKey) ?? ""
             return CloudTranscriber(apiKey: key,

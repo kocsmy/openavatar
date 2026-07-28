@@ -4,12 +4,14 @@ import Combine
 enum TranscriptionMode: String, Codable, CaseIterable {
     case local     // whisper.cpp — private, offline (default)
     case parakeet  // NVIDIA Parakeet via FluidAudio — neural engine, offline
+    case qwen      // Qwen3-ASR-1.7B via MLX bridge — most accurate, offline
     case cloud     // BYO-key OpenAI-compatible STT
 
     var displayName: String {
         switch self {
         case .local: return "Whisper (offline, 99 languages)"
         case .parakeet: return "Parakeet (offline, fastest — 25 languages)"
+        case .qwen: return "Qwen3-ASR (offline, most accurate — 52 languages)"
         case .cloud: return "Cloud (BYO key)"
         }
     }
@@ -104,6 +106,9 @@ final class SettingsStore: ObservableObject {
     @Published var calendarEnabled: Bool { didSet { defaults.set(calendarEnabled, forKey: "calendarEnabled") } }
     /// The user's own email, used to exclude "self" from participant name suggestions.
     @Published var calendarSelfEmail: String { didSet { defaults.set(calendarSelfEmail, forKey: "calendarSelfEmail") } }
+    /// Which calendar to read ("primary" or a specific calendar id, e.g. the
+    /// work calendar) — drives event detection, attendees, and Coming up.
+    @Published var calendarID: String { didSet { defaults.set(calendarID, forKey: "calendarID") } }
 
     // MARK: Calls
     /// Start transcribing automatically when an app takes the microphone (a
@@ -155,6 +160,7 @@ final class SettingsStore: ObservableObject {
         googleClientID = defaults.string(forKey: "googleClientID") ?? ""
         calendarEnabled = (defaults.object(forKey: "calendarEnabled") as? Bool) ?? false
         calendarSelfEmail = defaults.string(forKey: "calendarSelfEmail") ?? ""
+        calendarID = defaults.string(forKey: "calendarID") ?? "primary"
 
         autoStartOnCall = (defaults.object(forKey: "autoStartOnCall") as? Bool) ?? true
 

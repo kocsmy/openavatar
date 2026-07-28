@@ -50,4 +50,26 @@ final class CalendarTests: XCTestCase {
         let others = event.others(excludingSelfEmail: "me@example.com")
         XCTAssertEqual(others.map(\.name), ["The Boss"])
     }
+
+    func testCalendarListParsesAndSortsPrimaryFirst() throws {
+        let json = try JSONValue.parse("""
+        {
+          "items": [
+            {"id": "work@group.calendar.google.com", "summary": "Work"},
+            {"id": "me@example.com", "summary": "Me", "primary": true},
+            {"id": "family@group.calendar.google.com", "summary": "Family"}
+          ]
+        }
+        """)
+        let calendars = GoogleCalendarClient.parseCalendarList(json)
+        XCTAssertEqual(calendars.map(\.name), ["Me", "Family", "Work"])
+        XCTAssertTrue(calendars[0].isPrimary)
+    }
+
+    func testCalendarIDIsPercentEncodedInEventsURL() {
+        let comps = GoogleCalendarClient.eventsURLComponents(
+            calendarID: "work@group.calendar.google.com")
+        XCTAssertTrue(comps.url!.absoluteString
+            .contains("/calendars/work%40group%2Ecalendar%2Egoogle%2Ecom/events"))
+    }
 }

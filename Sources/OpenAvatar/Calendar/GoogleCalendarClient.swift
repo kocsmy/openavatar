@@ -41,20 +41,57 @@ struct CalendarEvent: Sendable, Equatable, Identifiable {
     }
 }
 
-/// Reads the user's primary Google Calendar via the Calendar API v3.
+/// One calendar the account can read — for the "which calendar" picker.
+struct CalendarInfo: Sendable, Equatable, Identifiable {
+    let id: String
+    let name: String
+    let isPrimary: Bool
+}
+
+/// Reads the user's chosen Google Calendar via the Calendar API v3.
 struct GoogleCalendarClient: Sendable {
     var tokenProvider: @Sendable () async throws -> String
     var http = HTTPClient()
 
+    /// Events endpoint for a calendar id (ids contain '@' and must be
+    /// percent-encoded as a single path component).
+    static func eventsURLComponents(calendarID: String) -> URLComponents {
+        let encoded = calendarID.addingPercentEncoding(withAllowedCharacters: .alphanumerics)
+            ?? calendarID
+        return URLComponents(string: "https://www.googleapis.com/calendar/v3/calendars/\(encoded)/events")!
+    }
+
+    /// Every calendar on the account, primary first — for the settings picker.
+    func listCalendars() async throws -> [CalendarInfo] {
+        let token = try await tokenProvider()
+        let url = URL(string: "https://www.googleapis.com/calendar/v3/users/me/calendarList?maxResults=50")!
+        let json = try await http.getJSON(url, headers: ["Authorization": "Bearer \(token)"])
+        return Self.parseCalendarList(json)
+    }
+
+    static func parseCalendarList(_ json: JSONValue) -> [CalendarInfo] {
+        (json["items"]?.arrayValue ?? [])
+            .compactMap { item -> CalendarInfo? in
+                guard let id = item["id"]?.stringValue else { return nil }
+                return CalendarInfo(id: id,
+                                    name: item["summary"]?.stringValue ?? id,
+                                    isPrimary: item["primary"]?.boolValue ?? false)
+            }
+            .sorted { a, b in
+                if a.isPrimary != b.isPrimary { return a.isPrimary }
+                return a.name.localizedCaseInsensitiveCompare(b.name) == .orderedAscending
+            }
+    }
+
     /// The event happening around `now` (or the nearest one within the window),
     /// with its attendees. Returns nil when nothing is scheduled.
-    func currentEvent(now: Date = Date()) async throws -> CalendarEvent? {
+    func currentEvent(calendarID: String = "primary", now: Date = Date()) async throws -> CalendarEvent? {
         let token = try await tokenProvider()
         let iso = ISO8601DateFormatter()
         let timeMin = iso.string(from: now.addingTimeInterval(-30 * 60))
         let timeMax = iso.string(from: now.addingTimeInterval(30 * 60))
 
-        var comps = URLComponents(string: "https://www.googleapis.com/calendar/v3/calendars/primary/events")!
+        var comps = Self.eventsURLComponents(calendarID: calendarID)
         comps.queryItems = [
             .init(name: "timeMin", value: timeMin),
             .init(name: "timeMax", value: timeMax),
@@ -78,10 +115,11 @@ struct GoogleCalendarClient: Sendable {
 
     /// Events over the next `days` (skipping ones already over), for the
     /// "Coming up" home view. All-day events are excluded — they're not calls.
-    func upcomingEvents(days: Int = 7, now: Date = Date()) async throws -> [CalendarEvent] {
+    func upcomingEvents(calendarID: String = "primary", days: Int = 7,
+                        now: Date = Date()) async throws -> [CalendarEvent] {
         let token = try await tokenProvider()
         let iso = ISO8601DateFormatter()
-        var comps = URLComponents(string: "https://www.googleapis.com/calendar/v3/calendars/primary/events")!
+        var comps = Self.eventsURLComponents(calendarID: calendarID)
         comps.queryItems = [
             .init(name: "timeMin", value: iso.string(from: now)),
             .init(name: "timeMax", value: iso.string(from: now.addingTimeInterval(Double(days) * 86_400))),
