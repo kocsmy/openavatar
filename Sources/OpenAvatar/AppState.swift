@@ -119,7 +119,9 @@ final class AppState: ObservableObject {
     private lazy var calendar = GoogleCalendarClient(
         tokenProvider: { try await GoogleOAuth.shared.accessToken() })
     private var capture: AudioCaptureService?
-    private var currentCallID: UUID?
+    /// The call being recorded (or, after stop, the last call) — the call
+    /// window binds its notes and transcript to this.
+    @Published private(set) var currentCallID: UUID?
     private var currentCallStartedAt: Date?
     private var callDetectorTimer: Timer?
     private let callDetector = CallDetector()
@@ -227,6 +229,11 @@ final class AppState: ObservableObject {
                 await diarizer.beginCall()   // reload fingerprints, fresh call state
             }
             refreshCalendar()            // identify who's on the call
+#if canImport(AppKit)
+            // Granola-style: the call window (your notes + live transcript)
+            // appears in the background without stealing focus from the call.
+            WindowManager.shared.showCallWindow(focus: false)
+#endif
         } catch {
             reportError(error)
         }
