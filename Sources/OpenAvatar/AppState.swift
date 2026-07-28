@@ -314,30 +314,12 @@ final class AppState: ObservableObject {
                     }
                 }
 
-                // Fold over-split voices back together before guessing names:
-                // stray low-evidence "Speaker N"s merge into the call's
-                // dominant voice, and a call-minted dominant voice adopts a
-                // matching stored name. The store relabels saved segments;
-                // mirror it into the live transcript here.
+                // Persist the evolved voice centroids so the next call's
+                // enrollment recognizes everyone faster. (In-call merging is
+                // the backend's job now — its clustering keeps one id per
+                // voice, so there are no stray speakers to fold.)
                 if settings.diarizationEnabled {
-                    let merges = await diarizer.consolidateCall()
-                    if !merges.isEmpty {
-                        var target: [String: String] = [:]
-                        for (s, t) in merges { target[s.uuidString] = t.uuidString }
-                        let labels = Dictionary(uniqueKeysWithValues:
-                            ((try? store.allSpeakerProfiles()) ?? [])
-                                .map { ($0.id.uuidString, $0.displayLabel) })
-                        for i in liveSegments.indices {
-                            guard var sid = liveSegments[i].speakerID else { continue }
-                            // Merges can chain (stray → dominant → named person).
-                            var hops = 0
-                            while let next = target[sid], hops < merges.count { sid = next; hops += 1 }
-                            if sid != liveSegments[i].speakerID {
-                                liveSegments[i].speakerID = sid
-                                liveSegments[i].speaker = labels[sid] ?? liveSegments[i].speaker
-                            }
-                        }
-                    }
+                    await diarizer.endCall()
                 }
 
                 // Auto-name still-unnamed voices from transcript evidence
@@ -509,12 +491,15 @@ final class AppState: ObservableObject {
                 var segments = try await transcriber.transcribe(chunk)
                 guard !segments.isEmpty else { return }
 
-                // Per-voice diarization on the "Others" (system) channel. Each
-                // utterance is matched to a persistent voice fingerprint so a
-                // named speaker keeps their name across calls.
+                // Per-voice diarization on the "Others" (system) channel: the
+                // chunk's audio is diarized into acoustic speaker turns first,
+                // then each transcript segment takes the speaker who did most
+                // of the talking in its time range. Named fingerprints are
+                // enrolled at call start, so names carry across calls.
                 if settings.diarizationEnabled, chunk.source == .system {
+                    await diarizer.ingest(chunk: chunk)
                     for i in segments.indices {
-                        if let hit = await diarizer.label(for: segments[i], in: chunk) {
+                        if let hit = await diarizer.label(for: segments[i]) {
                             var label = hit.label
                             // 1:1 calls: pre-fill the single other attendee's name
                             // onto the first unnamed voice we hear.

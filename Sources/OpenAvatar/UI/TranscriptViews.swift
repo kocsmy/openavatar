@@ -429,7 +429,7 @@ struct TranscriptsSettingsTab: View {
                                     Text(segment.speakerLabel)
                                         .font(.caption2.weight(.semibold))
                                         .foregroundStyle(TranscriptFormatter.color(for: segment))
-                                        .frame(width: 44, alignment: .leading)
+                                        .frame(width: 76, alignment: .leading)
                                     Text(segment.text)
                                         .font(.caption)
                                         .textSelection(.enabled)
