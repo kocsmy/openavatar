@@ -54,6 +54,18 @@ final class MeetingTests: XCTestCase {
         XCTAssertEqual(forA.map(\.title), ["Check script IDs"])
     }
 
+    func testDigestSplitsIntoScannableBullets() {
+        // The digest is decision summaries joined with "; " — the summary pane
+        // must never show it as one wall of text.
+        let digest = "Tighten up design fixes; Review demo/tickets and report gaps; Add back the opt-out page (removed after Termly migration).;  ; Monitor cookie-consent impact."
+        XCTAssertEqual(MeetingFormat.digestBullets(digest), [
+            "Tighten up design fixes",
+            "Review demo/tickets and report gaps",
+            "Add back the opt-out page (removed after Termly migration)",
+            "Monitor cookie-consent impact",
+        ])
+    }
+
     func testConsolidatorNotesLeadWithASummarySection() {
         // The meeting page's Summary tab renders these notes; the contract is
         // that they open with "## Summary" before the topic sections.

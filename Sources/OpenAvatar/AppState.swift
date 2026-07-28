@@ -40,7 +40,6 @@ final class AppState: ObservableObject {
     @Published var executedActions: [ExecutedAction] = []
     @Published var lastError: String?
     @Published var errorLog: [ErrorEntry] = []
-    @Published var showPostCallReview = false
     @Published var isPlanning = false
     @Published var suggestedCallApp: String?
     @Published var proactiveSuggestions: [ProactiveSuggestion] = []
@@ -149,8 +148,9 @@ final class AppState: ObservableObject {
 
     /// Arms/disarms automatic session start/stop; pure and unit-tested.
     private var autoPolicy = AutoSessionPolicy()
-    /// Whether the current session was started by the detector (only those
-    /// are ever auto-stopped — manual sessions may be dictation, no call app).
+    /// Whether the current session was started by the detector. Auto-started
+    /// sessions always auto-stop when their call ends; manual ones auto-stop
+    /// too once a call has been observed (never for call-less dictation).
     private var sessionAutoStarted = false
 
     private func detectorTick() {
@@ -211,6 +211,7 @@ final class AppState: ObservableObject {
         reviewCallNotes = nil
         previewEvent = nil   // the live call owns the notes window now
         sessionAutoStarted = auto
+        autoPolicy.sessionStarted()
         do {
             // Label with whoever holds the mic right now; fall back to the
             // banner's suggestion. Refined again mid-call (refreshCallAppLabel).
@@ -378,12 +379,12 @@ final class AppState: ObservableObject {
                     }
                 }
             }
-            if !detectedDecisions.isEmpty || !pendingFollowUps.isEmpty {
-                showPostCallReview = true
 #if canImport(AppKit)
-                WindowManager.shared.showPostCallReview()
+            // The call window flips from live notes to the finished meeting's
+            // page (Actions / Summary / Transcript) — bring it forward so the
+            // detected items are one glance away. No separate review window.
+            WindowManager.shared.showCallWindow()
 #endif
-            }
             // Compounding memory: digest the call, update facts, then see if
             // anything warrants a proactive nudge.
             if let callID {
@@ -403,35 +404,7 @@ final class AppState: ObservableObject {
         }
     }
 
-    /// Re-open the post-call review for a call from history. Loads ONLY the
-    /// items still awaiting a decision — anything already approved, dismissed,
-    /// or executed in an earlier review stays handled and does not resurrect.
-    /// Disabled while a live call is being recorded so it can't clobber the
-    /// in-progress session.
-    func reviewPastCall(_ callID: UUID) {
-        guard !isListening else { return }
-        let past = (try? store.decisions(callID: callID)) ?? []
-        currentCallID = callID
-        pendingApprovals = []
-        pendingFollowUps = []   // don't leak the last live call's follow-ups
-        detectedDecisions = past.awaitingReview
-        reviewCallNotes = (try? store.listCalls(limit: 1000))?
-            .first { $0.id == callID }?.notes
-        showPostCallReview = true
-#if canImport(AppKit)
-        WindowManager.shared.showPostCallReview()
-#endif
-    }
-
-    /// Already-handled decisions of the call currently shown in the review —
-    /// the audit trail behind the "Show handled" toggle.
-    func handledDecisions() -> [Decision] {
-        guard let callID = currentCallID else { return [] }
-        return ((try? store.decisions(callID: callID)) ?? [])
-            .filter { $0.status != .detected }
-    }
-
-    // MARK: - Follow-ups (confirm in review → scheduled reminder)
+    // MARK: - Follow-ups (confirm on the meeting page → scheduled reminder)
 
     /// Confirm a suggested follow-up: mark it scheduled and set a local reminder
     /// for its due time. Requests notification permission the first time.

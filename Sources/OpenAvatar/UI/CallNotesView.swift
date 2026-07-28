@@ -28,7 +28,30 @@ struct CallNotesWindowView: View {
         app.isListening ? nil : app.previewEvent
     }
 
+    /// The finished call's record — once present (and no live call or event
+    /// preview owns the window), the window becomes that meeting's page.
+    @State private var endedCall: ContextStore.CallRecord?
+
     var body: some View {
+        Group {
+            if !app.isListening, previewEvent == nil, let record = endedCall {
+                // The call just ended: this window IS the review now —
+                // actions to handle, the summary, and the transcript.
+                MeetingDetailView(call: record, showsBack: false, initialPane: .actions)
+            } else {
+                liveBody
+            }
+        }
+        .frame(minWidth: 560, minHeight: 460)
+        .tint(.brand)
+        .onAppear { loadDraft(); refreshEndedCall() }
+        .onChange(of: app.currentCallID) { _, _ in loadDraft(); refreshEndedCall() }
+        .onChange(of: app.previewEvent) { _, _ in loadDraft() }
+        .onChange(of: app.isListening) { _, _ in loadDraft(); refreshEndedCall() }
+        .onChange(of: app.isConsolidating) { _, _ in refreshEndedCall() }
+    }
+
+    private var liveBody: some View {
         VStack(alignment: .leading, spacing: 0) {
             Group {
                 if let event = previewEvent {
@@ -60,12 +83,14 @@ struct CallNotesWindowView: View {
                     .padding(.bottom, 12)
             }
         }
-        .frame(minWidth: 560, minHeight: 460)
-        .tint(.brand)
-        .onAppear { loadDraft() }
-        .onChange(of: app.currentCallID) { _, _ in loadDraft() }
-        .onChange(of: app.previewEvent) { _, _ in loadDraft() }
-        .onChange(of: app.isListening) { _, _ in loadDraft() }
+    }
+
+    private func refreshEndedCall() {
+        guard !app.isListening, let callID = app.currentCallID else {
+            endedCall = nil
+            return
+        }
+        endedCall = (try? app.store.listCalls(limit: 200))?.first { $0.id == callID }
     }
 
     // MARK: Headers
