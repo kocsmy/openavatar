@@ -105,6 +105,12 @@ final class SettingsStore: ObservableObject {
     /// The user's own email, used to exclude "self" from participant name suggestions.
     @Published var calendarSelfEmail: String { didSet { defaults.set(calendarSelfEmail, forKey: "calendarSelfEmail") } }
 
+    // MARK: Calls
+    /// Start transcribing automatically when an app takes the microphone (a
+    /// call starting), and stop when the call ends. Auto-started sessions
+    /// always post a notification — capture is never silent.
+    @Published var autoStartOnCall: Bool { didSet { defaults.set(autoStartOnCall, forKey: "autoStartOnCall") } }
+
     // MARK: Integrations (non-secret parts)
     @Published var githubDefaultRepo: String { didSet { defaults.set(githubDefaultRepo, forKey: "githubDefaultRepo") } }
     @Published var linearTeamKey: String { didSet { defaults.set(linearTeamKey, forKey: "linearTeamKey") } }
@@ -149,6 +155,8 @@ final class SettingsStore: ObservableObject {
         googleClientID = defaults.string(forKey: "googleClientID") ?? ""
         calendarEnabled = (defaults.object(forKey: "calendarEnabled") as? Bool) ?? false
         calendarSelfEmail = defaults.string(forKey: "calendarSelfEmail") ?? ""
+
+        autoStartOnCall = (defaults.object(forKey: "autoStartOnCall") as? Bool) ?? true
 
         githubDefaultRepo = defaults.string(forKey: "githubDefaultRepo") ?? ""
         linearTeamKey = defaults.string(forKey: "linearTeamKey") ?? ""

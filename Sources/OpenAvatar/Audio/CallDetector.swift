@@ -32,6 +32,11 @@ final class CallDetector {
     struct DetectedCall: Equatable {
         let appName: String
         let bundleID: String
+        /// True when this is unambiguously a call (a known call app holds the
+        /// mic, or a browser does during a calendar event with a meeting
+        /// link). Auto-start requires a strong signal; a random app opening
+        /// the mic only gets the suggestion banner.
+        var strongCallSignal: Bool = false
     }
 
     /// The app hosting the call right now, or nil when no app has the mic
@@ -48,11 +53,13 @@ final class CallDetector {
                          conferenceService: String?) -> DetectedCall? {
         if let known = micApps.first(where: { callAppNames[$0.bundleID] != nil }) {
             return DetectedCall(appName: callAppNames[known.bundleID]!,
-                                bundleID: known.bundleID)
+                                bundleID: known.bundleID,
+                                strongCallSignal: true)
         }
         if let browser = micApps.first(where: { browserBundleIDs.contains($0.bundleID) }) {
             let name = conferenceService ?? "\(browser.name) call"
-            return DetectedCall(appName: name, bundleID: browser.bundleID)
+            return DetectedCall(appName: name, bundleID: browser.bundleID,
+                                strongCallSignal: conferenceService != nil)
         }
         // Some other app holds the mic (dictation tools, unknown call apps):
         // better its real name than a wrong guess.

@@ -18,6 +18,7 @@ actor MemoryConsolidator {
 
     struct Outcome: Sendable {
         var digest: String
+        var notes: String = ""
         var factsAdded: Int
         var factsReinforced: Int
         var factsRetired: Int
@@ -53,7 +54,7 @@ actor MemoryConsolidator {
                 """)],
             tools: [Self.updateMemoryTool],
             toolChoice: .required,
-            maxTokens: 2048)
+            maxTokens: 4096)
 
         let response = try await router.complete(task: .summary, request)
         guard let call = response.toolCalls.first(where: { $0.name == "update_memory" }) else {
@@ -71,6 +72,11 @@ actor MemoryConsolidator {
         let digest = arguments["digest"]?.stringValue ?? ""
         if !digest.isEmpty {
             try store.insertDigest(callID: callID, digest: String(digest.prefix(800)))
+        }
+
+        let notes = arguments["notes"]?.stringValue ?? ""
+        if !notes.isEmpty {
+            try store.updateCallNotes(callID, notes: String(notes.prefix(8_000)))
         }
 
         var added = 0, reinforced = 0, retired = 0
@@ -96,7 +102,8 @@ actor MemoryConsolidator {
                 continue
             }
         }
-        return Outcome(digest: digest, factsAdded: added, factsReinforced: reinforced, factsRetired: retired)
+        return Outcome(digest: digest, notes: notes,
+                       factsAdded: added, factsReinforced: reinforced, factsRetired: retired)
     }
 
     /// The model references facts by the 8-char id prefix it was shown.
@@ -115,7 +122,13 @@ actor MemoryConsolidator {
         Produce:
         1. digest — a ≤120-word summary of this call: topics, decisions, outcomes, \
         who was involved.
-        2. facts — durable knowledge worth remembering across calls, as operations:
+        2. notes — structured meeting notes in Markdown, like a sharp colleague's \
+        minutes. One "## Topic" section per major topic discussed (2–6 sections), \
+        each with terse "- " bullets capturing the substance: concrete numbers, \
+        names, dates, decisions made, disagreements, and next steps. Prefer \
+        specifics over generalities ("churn at 3.2%, up from 2.8%" not "churn \
+        discussed"). No preamble, no filler bullets, nothing invented.
+        3. facts — durable knowledge worth remembering across calls, as operations:
            - add: a NEW fact not already in memory. Categories: identity (role/team), \
         preference (how they like things done), project (active work), person \
         (collaborators and how to reach them), commitment (open promises WITH \
@@ -137,6 +150,8 @@ actor MemoryConsolidator {
             "type": "object",
             "properties": .object([
                 "digest": .object(["type": "string", "description": "≤120-word call summary"]),
+                "notes": .object(["type": "string",
+                                  "description": "Structured Markdown meeting notes: '## Topic' sections with '- ' detail bullets (numbers, names, decisions, next steps)"]),
                 "facts": .object([
                     "type": "array",
                     "items": .object([

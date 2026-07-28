@@ -1,0 +1,95 @@
+import XCTest
+@testable import OpenAvatar
+
+/// The auto start/stop state machine around calls. The stakes: never record
+/// against the user's explicit stop, never let a mic blip end a session, and
+/// never let a random non-call app trigger recording (that part lives in
+/// CallDetector.strongCallSignal, tested in CallDetectionTests).
+final class AutoSessionPolicyTests: XCTestCase {
+
+    func testStartsWhenCallAppearsAndEnabled() {
+        var p = AutoSessionPolicy()
+        XCTAssertEqual(p.tick(enabled: true, isListening: false, autoStarted: false,
+                              callActive: false), .none)
+        XCTAssertEqual(p.tick(enabled: true, isListening: false, autoStarted: false,
+                              callActive: true), .start)
+    }
+
+    func testNeverStartsWhenDisabled() {
+        var p = AutoSessionPolicy()
+        XCTAssertEqual(p.tick(enabled: false, isListening: false, autoStarted: false,
+                              callActive: true), .none)
+    }
+
+    func testStopsOnlyAfterConsecutiveMissedTicks() {
+        var p = AutoSessionPolicy()
+        _ = p.tick(enabled: true, isListening: false, autoStarted: false, callActive: true) // .start
+        // Call ongoing, then a one-tick mic blip, then back: must not stop.
+        XCTAssertEqual(p.tick(enabled: true, isListening: true, autoStarted: true, callActive: true), .none)
+        XCTAssertEqual(p.tick(enabled: true, isListening: true, autoStarted: true, callActive: false), .none)
+        XCTAssertEqual(p.tick(enabled: true, isListening: true, autoStarted: true, callActive: true), .none)
+        // Call actually over: stops after ticksToStop consecutive misses.
+        for _ in 1..<AutoSessionPolicy.ticksToStop {
+            XCTAssertEqual(p.tick(enabled: true, isListening: true, autoStarted: true, callActive: false), .none)
+        }
+        XCTAssertEqual(p.tick(enabled: true, isListening: true, autoStarted: true, callActive: false), .stop)
+    }
+
+    func testManualSessionsAreNeverAutoStopped() {
+        var p = AutoSessionPolicy()
+        for _ in 0..<10 {
+            XCTAssertEqual(p.tick(enabled: true, isListening: true, autoStarted: false,
+                                  callActive: false), .none)
+        }
+    }
+
+    func testUserStopMidCallDisarmsUntilCallEnds() {
+        var p = AutoSessionPolicy()
+        _ = p.tick(enabled: true, isListening: false, autoStarted: false, callActive: true) // .start
+        p.userStopped(callStillActive: true)
+        // Same call still going: must NOT restart against the user's wish.
+        XCTAssertEqual(p.tick(enabled: true, isListening: false, autoStarted: false, callActive: true), .none)
+        XCTAssertEqual(p.tick(enabled: true, isListening: false, autoStarted: false, callActive: true), .none)
+        // Call ends → re-arms; the NEXT call auto-starts again.
+        XCTAssertEqual(p.tick(enabled: true, isListening: false, autoStarted: false, callActive: false), .none)
+        XCTAssertEqual(p.tick(enabled: true, isListening: false, autoStarted: false, callActive: true), .start)
+    }
+
+    func testUserStopAfterCallEndedStaysArmed() {
+        var p = AutoSessionPolicy()
+        p.userStopped(callStillActive: false)
+        XCTAssertEqual(p.tick(enabled: true, isListening: false, autoStarted: false,
+                              callActive: true), .start)
+    }
+}
+
+/// The block-level Markdown parser behind the meeting-notes view.
+final class MarkdownNoteTests: XCTestCase {
+
+    func testParsesHeadingsBulletsAndText() {
+        let blocks = MarkdownNote.parse("""
+        ## June ARR Summary
+        - Self-serve landed at $612k
+        * Churn still an issue
+        Some plain line.
+
+        ### Next steps
+        """)
+        XCTAssertEqual(blocks, [
+            .heading("June ARR Summary"),
+            .bullet("Self-serve landed at $612k"),
+            .bullet("Churn still an issue"),
+            .text("Some plain line."),
+            .heading("Next steps")
+        ])
+    }
+
+    func testBlankAndWhitespaceLinesAreDropped() {
+        XCTAssertEqual(MarkdownNote.parse("\n   \n\n"), [])
+    }
+
+    func testIndentedBulletsStillParse() {
+        XCTAssertEqual(MarkdownNote.parse("  - nested detail"),
+                       [.bullet("nested detail")])
+    }
+}

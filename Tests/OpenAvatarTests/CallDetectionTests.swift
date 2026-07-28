@@ -53,6 +53,35 @@ final class CallDetectionTests: XCTestCase {
         XCTAssertEqual(detected?.appName, "Slack")
     }
 
+    // MARK: Strong vs weak signals (auto-start gate)
+
+    func testKnownCallAppIsAStrongSignal() {
+        let detected = CallDetector.classify(
+            micApps: [app("us.zoom.xos", "zoom.us")], conferenceService: nil)
+        XCTAssertEqual(detected?.strongCallSignal, true)
+    }
+
+    func testBrowserDuringCalendarMeetingIsStrong() {
+        let detected = CallDetector.classify(
+            micApps: [app("com.google.Chrome", "Google Chrome")],
+            conferenceService: "Google Meet")
+        XCTAssertEqual(detected?.strongCallSignal, true)
+    }
+
+    func testBrowserWithoutCalendarIsWeak() {
+        // A website using the mic isn't necessarily a call — suggest, don't record.
+        let detected = CallDetector.classify(
+            micApps: [app("com.apple.Safari", "Safari")], conferenceService: nil)
+        XCTAssertEqual(detected?.strongCallSignal, false)
+    }
+
+    func testUnknownMicHolderIsWeak() {
+        // Dictation tools etc. must never trigger auto-recording.
+        let detected = CallDetector.classify(
+            micApps: [app("com.example.dictate", "SuperDictate")], conferenceService: nil)
+        XCTAssertEqual(detected?.strongCallSignal, false)
+    }
+
     // MARK: Conference-service extraction from calendar events
 
     func testConferenceSolutionNameWins() throws {
