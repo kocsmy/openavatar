@@ -219,6 +219,10 @@ enum TranscriptFormatter {
         var lines = ["# Call transcript — \(call.startedAt.formatted(date: .abbreviated, time: .shortened))"]
         if let app = call.app { lines.append("App: \(app)") }
         if let summary = call.summary, !summary.isEmpty { lines.append("Summary: \(summary)") }
+        if let notes = call.notes, !notes.isEmpty {
+            lines.append("")
+            lines.append(notes)
+        }
         lines.append("")
         lines.append(plainText(segments, callStart: call.startedAt))
         return lines.joined(separator: "\n")
@@ -396,6 +400,18 @@ struct TranscriptsSettingsTab: View {
                 }
 
                 Divider()
+
+                if let notes = selectedCall?.notes, !notes.isEmpty {
+                    DisclosureGroup {
+                        ScrollView {
+                            MeetingNotesView(markdown: notes).padding(.vertical, 4)
+                        }
+                        .frame(maxHeight: 180)
+                    } label: {
+                        Label("Meeting notes", systemImage: "note.text")
+                            .font(.callout.weight(.medium))
+                    }
+                }
 
                 if segments.isEmpty {
                     Text(selectedCallID == nil ? "Select a call above."

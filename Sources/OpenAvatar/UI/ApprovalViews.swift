@@ -179,6 +179,7 @@ struct PostCallReviewView: View {
 
     private var isEmpty: Bool {
         app.detectedDecisions.isEmpty && app.pendingApprovals.isEmpty && app.pendingFollowUps.isEmpty
+            && app.reviewCallNotes == nil && !app.isConsolidating
     }
 
     var body: some View {
@@ -191,6 +192,7 @@ struct PostCallReviewView: View {
                 header
                 ScrollView {
                     VStack(alignment: .leading, spacing: 10) {
+                        notesSection
                         if !app.pendingFollowUps.isEmpty {
                             followUpsSection
                         }
@@ -211,6 +213,27 @@ struct PostCallReviewView: View {
         .padding(20)
         .frame(width: 640, height: 600)
         .onAppear { handled = app.handledDecisions() }
+    }
+
+    /// Granola-style structured notes: shown once consolidation writes them,
+    /// with a progress row in the seconds before they arrive.
+    @ViewBuilder private var notesSection: some View {
+        if let notes = app.reviewCallNotes, !notes.isEmpty {
+            VStack(alignment: .leading, spacing: 8) {
+                Label("Meeting notes", systemImage: "note.text")
+                    .font(.subheadline.weight(.semibold))
+                    .foregroundStyle(Color.brand)
+                MeetingNotesView(markdown: notes)
+            }
+            .padding(12)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background(Color.brand.opacity(0.06), in: RoundedRectangle(cornerRadius: 10))
+        } else if app.isConsolidating {
+            HStack(spacing: 8) {
+                ProgressView().controlSize(.small)
+                Text("Writing meeting notes…").font(.caption).foregroundStyle(.secondary)
+            }
+        }
     }
 
     // MARK: Handled history ("what happened")

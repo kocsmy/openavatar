@@ -20,7 +20,7 @@ struct CalendarAttendee: Identifiable, Sendable, Equatable, Hashable {
 }
 
 /// A calendar event relevant to "who am I talking to right now".
-struct CalendarEvent: Sendable, Equatable {
+struct CalendarEvent: Sendable, Equatable, Identifiable {
     let id: String
     let title: String
     let start: Date?
@@ -74,6 +74,25 @@ struct GoogleCalendarClient: Sendable {
         }) { return ongoing }
         if let upcoming = events.first(where: { ($0.start ?? .distantPast) >= now }) { return upcoming }
         return events.last
+    }
+
+    /// Events over the next `days` (skipping ones already over), for the
+    /// "Coming up" home view. All-day events are excluded — they're not calls.
+    func upcomingEvents(days: Int = 7, now: Date = Date()) async throws -> [CalendarEvent] {
+        let token = try await tokenProvider()
+        let iso = ISO8601DateFormatter()
+        var comps = URLComponents(string: "https://www.googleapis.com/calendar/v3/calendars/primary/events")!
+        comps.queryItems = [
+            .init(name: "timeMin", value: iso.string(from: now)),
+            .init(name: "timeMax", value: iso.string(from: now.addingTimeInterval(Double(days) * 86_400))),
+            .init(name: "singleEvents", value: "true"),
+            .init(name: "orderBy", value: "startTime"),
+            .init(name: "maxResults", value: "30")
+        ]
+        let json = try await http.getJSON(comps.url!, headers: ["Authorization": "Bearer \(token)"])
+        return (json["items"]?.arrayValue ?? [])
+            .filter { $0["start"]?["dateTime"] != nil }   // has a time = not all-day
+            .compactMap { Self.parseEvent($0, iso: iso) }
     }
 
     static func parseEvent(_ item: JSONValue, iso: ISO8601DateFormatter) -> CalendarEvent? {

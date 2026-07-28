@@ -76,6 +76,21 @@ final class MemoryTests: XCTestCase {
         XCTAssertEqual(try store.recentDigests(limit: 1).count, 1)
     }
 
+    func testConsolidatorStoresMeetingNotesOnTheCall() async throws {
+        let callID = try store.startCall(app: "Zoom")
+        let consolidator = MemoryConsolidator(router: LLMRouter(store: nil), store: store)
+        let arguments = try JSONValue.parse("""
+        {"digest": "Reviewed June numbers.",
+         "notes": "## June ARR\\n- Self-serve at $612k\\n- Churn 3.2%",
+         "facts": []}
+        """)
+        let outcome = try await consolidator.apply(arguments, callID: callID, existing: [])
+        XCTAssertTrue(outcome.notes.contains("June ARR"))
+
+        let call = try XCTUnwrap(store.listCalls(limit: 5).first { $0.id == callID })
+        XCTAssertEqual(call.notes, "## June ARR\n- Self-serve at $612k\n- Churn 3.2%")
+    }
+
     func testFactMatchByIDPrefix() {
         let fact = MemoryFact(category: .person, content: "Anna runs design", salience: 2)
         XCTAssertNotNil(MemoryConsolidator.match(String(fact.id.uuidString.prefix(8)), in: [fact]))

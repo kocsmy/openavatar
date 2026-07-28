@@ -49,6 +49,13 @@ final class AppState: ObservableObject {
     // Calendar context for the current call (who you're talking to).
     @Published var currentEvent: CalendarEvent?
     @Published var callAttendees: [CalendarAttendee] = []
+    /// Upcoming meetings for the Home "Coming up" view.
+    @Published var upcomingEvents: [CalendarEvent] = []
+
+    /// Structured Markdown notes of the call currently shown in the review
+    /// (arrives asynchronously from consolidation, a few seconds after the
+    /// review opens).
+    @Published var reviewCallNotes: String?
 
     /// Follow-ups detected on this call, awaiting confirmation in the review.
     @Published var pendingFollowUps: [FollowUp] = []
@@ -118,35 +125,70 @@ final class AppState: ObservableObject {
     private let callDetector = CallDetector()
 
     private init() {
-        // Every 20s: while idle, suggest (never auto-start) capture when an
-        // app actually holds the microphone — a real call signal. While
-        // listening, keep the saved call's app label honest: the right app is
-        // only knowable mid-call (mic ownership), and the calendar event that
-        // names a browser call ("Google Meet") may arrive after start.
-        callDetectorTimer = Timer.scheduledTimer(withTimeInterval: 20, repeats: true) { [weak self] _ in
+        // Every 5s, check who holds the microphone. While idle: surface the
+        // suggestion banner, and (when enabled) auto-start capture on a strong
+        // call signal — Granola-style, joining a Zoom call just starts the
+        // notes. While listening: keep the saved call's app label honest, and
+        // auto-stop auto-started sessions once the call is over.
+        callDetectorTimer = Timer.scheduledTimer(withTimeInterval: 5, repeats: true) { [weak self] _ in
             Task { @MainActor in
-                guard let self else { return }
-                if self.isListening {
-                    self.refreshCallAppLabel()
-                } else {
-                    self.suggestedCallApp = self.callDetector
-                        .detectActiveCall(conferenceService: self.currentEvent?.conferenceService)?
-                        .appName
-                }
+                self?.detectorTick()
             }
+        }
+        // Auto-started sessions announce themselves with a notification —
+        // make sure we're allowed to post it before the first call happens.
+        if settings.autoStartOnCall {
+            Task { await NotificationScheduler.requestAuthorization() }
+        }
+    }
+
+    /// Arms/disarms automatic session start/stop; pure and unit-tested.
+    private var autoPolicy = AutoSessionPolicy()
+    /// Whether the current session was started by the detector (only those
+    /// are ever auto-stopped — manual sessions may be dictation, no call app).
+    private var sessionAutoStarted = false
+
+    private func detectorTick() {
+        let detected = callDetector.detectActiveCall(
+            conferenceService: currentEvent?.conferenceService)
+        if isListening {
+            refreshCallAppLabel(detected: detected)
+        } else {
+            suggestedCallApp = detected?.appName
+        }
+
+        // Auto-start only on a STRONG signal (a known call app, or a browser
+        // during a calendar event with a meeting link) — a random app opening
+        // the mic must not trigger recording.
+        switch autoPolicy.tick(enabled: settings.autoStartOnCall,
+                               isListening: isListening,
+                               autoStarted: sessionAutoStarted,
+                               callActive: detected?.strongCallSignal == true) {
+        case .start:
+            startListening(auto: true)
+            if isListening {   // only announce if start actually succeeded
+                NotificationScheduler.postNow(
+                    title: "Transcribing your \(detected?.appName ?? "call")",
+                    body: "A call started, so \(settings.assistantName) is taking notes. Click the menu-bar icon to stop.")
+            }
+        case .stop:
+            stopListening(auto: true)
+            NotificationScheduler.postNow(
+                title: "Call ended",
+                body: "Stopped transcribing — your notes and action items are ready.")
+        case .none:
+            break
         }
     }
 
     /// Current best label for the app hosting this call (persisted on the record).
     private var currentCallAppLabel: String?
 
-    /// Re-detect who owns the mic and update the call record when it changes
-    /// — e.g. Slack was guessed at start but Zoom turns out to host the call,
-    /// or the calendar event now identifies the browser call as Google Meet.
-    private func refreshCallAppLabel() {
-        guard let callID = currentCallID, isListening else { return }
-        guard let detected = callDetector.detectActiveCall(
-            conferenceService: currentEvent?.conferenceService) else { return }
+    /// Update the call record when the detected mic owner changes — e.g. Slack
+    /// was guessed at start but Zoom turns out to host the call, or the
+    /// calendar event now identifies the browser call as Google Meet.
+    private func refreshCallAppLabel(detected: CallDetector.DetectedCall?) {
+        guard let callID = currentCallID, isListening, let detected else { return }
         guard detected.appName != currentCallAppLabel else { return }
         currentCallAppLabel = detected.appName
         try? store.updateCallApp(callID, app: detected.appName)
@@ -154,13 +196,15 @@ final class AppState: ObservableObject {
 
     // MARK: - Listening lifecycle (spec §4.1: icon always reflects state)
 
-    func startListening() {
+    func startListening(auto: Bool = false) {
         guard !isListening else { return }
         lastError = nil
         liveSegments = []
         detectedDecisions = []
         pendingFollowUps = []
         assignedAttendeeEmails = []
+        reviewCallNotes = nil
+        sessionAutoStarted = auto
         do {
             // Label with whoever holds the mic right now; fall back to the
             // banner's suggestion. Refined again mid-call (refreshCallAppLabel).
@@ -210,12 +254,32 @@ final class AppState: ObservableObject {
         }
     }
 
-    func stopListening() {
+    /// Refresh the Home view's "Coming up" list. Best-effort.
+    func refreshUpcomingEvents() {
+        guard settings.calendarEnabled, GoogleOAuth.shared.isConnected else {
+            upcomingEvents = []
+            return
+        }
+        Task {
+            if let events = try? await calendar.upcomingEvents() {
+                upcomingEvents = events
+            }
+        }
+    }
+
+    func stopListening(auto: Bool = false) {
         guard isListening else { return }
         capture?.stop()
         capture = nil
         isListening = false
         systemAudioActive = false
+        if !auto {
+            // The user hit Stop themselves. If the call is still going,
+            // auto-start must not fight them by restarting seconds later.
+            autoPolicy.userStopped(callStillActive: callDetector.detectActiveCall(
+                conferenceService: currentEvent?.conferenceService)?.strongCallSignal == true)
+        }
+        sessionAutoStarted = false
 
         let callID = currentCallID
         let callStart = currentCallStartedAt
@@ -304,7 +368,10 @@ final class AppState: ObservableObject {
                 isConsolidating = true
                 defer { isConsolidating = false }
                 do {
-                    try await consolidator.consolidate(callID: callID)
+                    let outcome = try await consolidator.consolidate(callID: callID)
+                    if !outcome.notes.isEmpty, currentCallID == callID {
+                        reviewCallNotes = outcome.notes
+                    }
                     proactiveSuggestions = (try? await proactive.suggestions()) ?? proactiveSuggestions
                 } catch {
                     // Memory is best-effort; never block the review flow on it.
@@ -326,6 +393,8 @@ final class AppState: ObservableObject {
         pendingApprovals = []
         pendingFollowUps = []   // don't leak the last live call's follow-ups
         detectedDecisions = past.awaitingReview
+        reviewCallNotes = (try? store.listCalls(limit: 1000))?
+            .first { $0.id == callID }?.notes
         showPostCallReview = true
 #if canImport(AppKit)
         WindowManager.shared.showPostCallReview()
@@ -430,7 +499,9 @@ final class AppState: ObservableObject {
         guard let callID = currentCallID else { return }
         if chunk.source == .system, !systemAudioActive {
             systemAudioActive = true
-            refreshCallAppLabel()   // call is audibly underway — correct the label early
+            // Call is audibly underway — correct the label early.
+            refreshCallAppLabel(detected: callDetector.detectActiveCall(
+                conferenceService: currentEvent?.conferenceService))
         }
         Task {
             do {

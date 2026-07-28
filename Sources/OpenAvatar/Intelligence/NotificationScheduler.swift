@@ -41,6 +41,18 @@ enum NotificationScheduler {
 #endif
     }
 
+    /// Post an immediate notification (e.g. "started transcribing your Zoom
+    /// call") — auto-capture must never be silent. Best-effort.
+    static func postNow(title: String, body: String) {
+#if canImport(UserNotifications)
+        let content = UNMutableNotificationContent()
+        content.title = title
+        content.body = body
+        UNUserNotificationCenter.current().add(
+            UNNotificationRequest(identifier: UUID().uuidString, content: content, trigger: nil))
+#endif
+    }
+
     static func cancel(id: UUID) {
 #if canImport(UserNotifications)
         UNUserNotificationCenter.current()

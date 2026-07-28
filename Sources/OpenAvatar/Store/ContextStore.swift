@@ -153,6 +153,12 @@ final class ContextStore: @unchecked Sendable {
                 CREATE INDEX idx_followups_status ON followups(status, due_at);
                 """)
         }
+        // v6 — rich meeting notes: the consolidator's structured Markdown notes
+        // (topic sections with detail bullets), stored per call alongside the
+        // short one-line summary.
+        migrator.registerMigration("v6-call-notes") { db in
+            try db.execute(sql: "ALTER TABLE calls ADD COLUMN notes TEXT")
+        }
         try migrator.migrate(dbQueue)
     }
 
@@ -233,6 +239,14 @@ final class ContextStore: @unchecked Sendable {
         }
     }
 
+    /// Store the consolidator's structured Markdown meeting notes on the call.
+    func updateCallNotes(_ id: UUID, notes: String) throws {
+        try dbQueue.write { db in
+            try db.execute(sql: "UPDATE calls SET notes = ? WHERE id = ?",
+                           arguments: [notes, id.uuidString])
+        }
+    }
+
     // MARK: - Calls (browsing)
 
     struct CallRecord: Identifiable {
@@ -241,12 +255,13 @@ final class ContextStore: @unchecked Sendable {
         let endedAt: Date?
         let app: String?
         let summary: String?
+        var notes: String?
     }
 
     func listCalls(limit: Int = 200) throws -> [CallRecord] {
         try dbQueue.read { db in
             let rows = try Row.fetchAll(db, sql: """
-                SELECT id, started_at, ended_at, app, summary FROM calls
+                SELECT id, started_at, ended_at, app, summary, notes FROM calls
                 ORDER BY started_at DESC LIMIT ?
                 """, arguments: [limit])
             return rows.compactMap { row in
@@ -257,7 +272,8 @@ final class ContextStore: @unchecked Sendable {
                     startedAt: Date(timeIntervalSince1970: row["started_at"] as Double? ?? 0),
                     endedAt: ended.map(Date.init(timeIntervalSince1970:)),
                     app: row["app"] as String?,
-                    summary: row["summary"] as String?)
+                    summary: row["summary"] as String?,
+                    notes: row["notes"] as String?)
             }
         }
     }

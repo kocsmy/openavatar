@@ -1,31 +1,96 @@
 import SwiftUI
 import UniformTypeIdentifiers
 
-struct SettingsView: View {
-    var body: some View {
-        TabView {
-            GeneralSettingsTab()
-                .tabItem { Label("General", systemImage: "gearshape") }
-            TranscriptionSettingsTab()
-                .tabItem { Label("Transcription", systemImage: "waveform") }
-            ModelsSettingsTab()
-                .tabItem { Label("Models", systemImage: "brain") }
-            IntegrationsSettingsTab()
-                .tabItem { Label("Integrations", systemImage: "puzzlepiece.extension") }
-            TrustMatrixTab()
-                .tabItem { Label("Trust", systemImage: "checkmark.shield") }
-            MemorySettingsTab()
-                .tabItem { Label("Memory", systemImage: "brain.head.profile") }
-            TranscriptsSettingsTab()
-                .tabItem { Label("Transcripts", systemImage: "text.quote") }
-            FollowUpsSettingsTab()
-                .tabItem { Label("Follow-ups", systemImage: "bell.badge") }
-            MetricsDashboardTab()
-                .tabItem { Label("Metrics", systemImage: "chart.bar") }
-            DataSettingsTab()
-                .tabItem { Label("Data", systemImage: "externaldrive") }
+/// Main-window navigation: a left sidebar (Granola-style) instead of a top
+/// tab strip — content up top (Home, Library), configuration below (Setup).
+enum MainSection: String, CaseIterable, Identifiable {
+    case home
+    case transcripts, followUps, metrics
+    case general, transcription, models, integrations, trust, memory, data
+
+    var id: String { rawValue }
+
+    var label: String {
+        switch self {
+        case .home: return "Home"
+        case .transcripts: return "Transcripts"
+        case .followUps: return "Follow-ups"
+        case .metrics: return "Metrics"
+        case .general: return "General"
+        case .transcription: return "Transcription"
+        case .models: return "Models"
+        case .integrations: return "Integrations"
+        case .trust: return "Trust"
+        case .memory: return "Memory"
+        case .data: return "Data"
         }
-        .frame(width: 720, height: 640)
+    }
+
+    var icon: String {
+        switch self {
+        case .home: return "house"
+        case .transcripts: return "text.quote"
+        case .followUps: return "bell.badge"
+        case .metrics: return "chart.bar"
+        case .general: return "gearshape"
+        case .transcription: return "waveform"
+        case .models: return "brain"
+        case .integrations: return "puzzlepiece.extension"
+        case .trust: return "checkmark.shield"
+        case .memory: return "brain.head.profile"
+        case .data: return "externaldrive"
+        }
+    }
+}
+
+struct SettingsView: View {
+    @State private var section: MainSection = .home
+
+    var body: some View {
+        NavigationSplitView {
+            List(selection: $section) {
+                sidebarRow(.home)
+                Section("Library") {
+                    sidebarRow(.transcripts)
+                    sidebarRow(.followUps)
+                    sidebarRow(.metrics)
+                }
+                Section("Setup") {
+                    sidebarRow(.general)
+                    sidebarRow(.transcription)
+                    sidebarRow(.models)
+                    sidebarRow(.integrations)
+                    sidebarRow(.trust)
+                    sidebarRow(.memory)
+                    sidebarRow(.data)
+                }
+            }
+            .listStyle(.sidebar)
+            .navigationSplitViewColumnWidth(min: 180, ideal: 190, max: 220)
+        } detail: {
+            detail
+        }
+        .frame(width: 950, height: 660)
+    }
+
+    private func sidebarRow(_ s: MainSection) -> some View {
+        Label(s.label, systemImage: s.icon).tag(s)
+    }
+
+    @ViewBuilder private var detail: some View {
+        switch section {
+        case .home: HomeTab()
+        case .transcripts: TranscriptsSettingsTab()
+        case .followUps: FollowUpsSettingsTab()
+        case .metrics: MetricsDashboardTab()
+        case .general: GeneralSettingsTab()
+        case .transcription: TranscriptionSettingsTab()
+        case .models: ModelsSettingsTab()
+        case .integrations: IntegrationsSettingsTab()
+        case .trust: TrustMatrixTab()
+        case .memory: MemorySettingsTab()
+        case .data: DataSettingsTab()
+        }
     }
 }
 
@@ -48,6 +113,11 @@ struct GeneralSettingsTab: View {
                 }
                 .pickerStyle(.radioGroup)
                 Text("Passive: decisions accumulate into a post-call review. Active: executes immediately when you address the assistant directly (subject to the Trust matrix).")
+                    .font(.caption).foregroundStyle(.secondary)
+            }
+            Section("Calls") {
+                Toggle("Start transcribing automatically when a call starts", isOn: $settings.autoStartOnCall)
+                Text("When Zoom, Teams, Slack, or a browser meeting takes the microphone, notes start by themselves and stop when the call ends — you'll get a notification each time it happens. Turning this off keeps the manual Start button and the menu-bar suggestion.")
                     .font(.caption).foregroundStyle(.secondary)
             }
             Section("Detection") {
