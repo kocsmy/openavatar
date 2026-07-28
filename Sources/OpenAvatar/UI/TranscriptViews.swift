@@ -359,6 +359,15 @@ enum MeetingFormat {
         if minutes < 60 { return "\(minutes) min" }
         return "\(minutes / 60) h \(minutes % 60) min"
     }
+
+    /// The call digest is action summaries joined with "; " — as prose it's a
+    /// wall of text. Split it back into scannable bullets.
+    static func digestBullets(_ digest: String) -> [String] {
+        digest.components(separatedBy: ";")
+            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+            .map { $0.hasSuffix(".") ? String($0.dropLast()) : $0 }
+            .filter { !$0.isEmpty }
+    }
 }
 
 // MARK: - Meeting page (full-pane detail, Granola-style)
@@ -366,14 +375,25 @@ enum MeetingFormat {
 struct MeetingDetailView: View {
     @EnvironmentObject var app: AppState
     let call: ContextStore.CallRecord
-    var onBack: () -> Void
+    /// Hidden when the page is the whole window (post-call), shown inside the
+    /// Meetings library.
+    var showsBack: Bool = true
+    var onBack: () -> Void = {}
 
     enum Pane: String, CaseIterable {
         case summary = "Summary"
         case actions = "Actions"
         case transcript = "Transcript"
     }
-    @State private var pane: Pane = .summary
+    @State private var pane: Pane
+
+    init(call: ContextStore.CallRecord, showsBack: Bool = true,
+         initialPane: Pane = .summary, onBack: @escaping () -> Void = {}) {
+        self.call = call
+        self.showsBack = showsBack
+        self.onBack = onBack
+        _pane = State(initialValue: initialPane)
+    }
     @State private var segments: [TranscriptSegment] = []
     @State private var callSpeakers: [SpeakerProfile] = []
     @State private var allProfiles: [SpeakerProfile] = []
@@ -406,6 +426,10 @@ struct MeetingDetailView: View {
             }
         }
         .onAppear { reload() }
+        // Right after a call, detection and note-writing land asynchronously —
+        // keep the page current as they do.
+        .onChange(of: app.isConsolidating) { _, _ in reload() }
+        .onChange(of: app.detectedDecisions.count) { _, _ in reload() }
     }
 
     private func reload() {
@@ -421,21 +445,21 @@ struct MeetingDetailView: View {
     private var header: some View {
         VStack(alignment: .leading, spacing: DS.s8) {
             HStack {
-                DSRow(style: .ghost) {
-                    onBack()
-                } content: {
-                    Label("Meetings", systemImage: "chevron.left")
-                        .font(.dsBody)
-                        .padding(.horizontal, DS.s8)
-                        .padding(.vertical, DS.s4)
+                if showsBack {
+                    DSRow(style: .ghost) {
+                        onBack()
+                    } content: {
+                        Label("Meetings", systemImage: "chevron.left")
+                            .font(.dsBody)
+                            .padding(.horizontal, DS.s8)
+                            .padding(.vertical, DS.s4)
+                    }
                 }
                 Spacer()
                 if let message {
                     Text(message).font(.dsMeta).foregroundStyle(.secondary)
                 }
                 Menu {
-                    Button("Open call review") { app.reviewPastCall(call.id) }
-                        .disabled(app.isListening)
                     Button("Export as Markdown…") { exportMarkdown() }
                         .disabled(segments.isEmpty)
                     Button("Copy transcript") { copyTranscript() }
@@ -513,10 +537,19 @@ struct MeetingDetailView: View {
 
     // MARK: Summary
 
+    /// The freshest notes available: for the just-ended call, consolidation
+    /// publishes them before the list's record snapshot refreshes.
+    private var resolvedNotes: String? {
+        if call.id == app.currentCallID, let live = app.reviewCallNotes, !live.isEmpty {
+            return live
+        }
+        return call.notes
+    }
+
     private var summaryPane: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: DS.s16) {
-                if let notes = call.notes, !notes.isEmpty {
+                if let notes = resolvedNotes, !notes.isEmpty {
                     MeetingNotesView(markdown: notes)
                 } else if app.isConsolidating {
                     HStack(spacing: DS.s8) {
@@ -524,7 +557,19 @@ struct MeetingDetailView: View {
                         Text("Writing meeting notes…").font(.dsBody).foregroundStyle(.secondary)
                     }
                 } else if let summary = call.summary, !summary.isEmpty {
-                    Text(summary).font(.dsBody)
+                    // Older calls without structured notes: the digest as
+                    // scannable bullets, never a wall of text.
+                    VStack(alignment: .leading, spacing: DS.s6) {
+                        DSSectionLabel(text: "What came out of it")
+                        ForEach(Array(MeetingFormat.digestBullets(summary).enumerated()),
+                                id: \.offset) { _, item in
+                            HStack(alignment: .top, spacing: DS.s8) {
+                                Text("•").foregroundStyle(Color.brand)
+                                Text(item).font(.dsBody)
+                                    .frame(maxWidth: .infinity, alignment: .leading)
+                            }
+                        }
+                    }
                 } else {
                     ContentUnavailableView("No notes for this meeting", systemImage: "note.text",
                                            description: Text("Notes are written when a call ends with a transcript."))
@@ -562,10 +607,7 @@ struct MeetingDetailView: View {
                     VStack(alignment: .leading, spacing: DS.s8) {
                         DSSectionLabel(text: "Action items")
                         ForEach(decisions) { decision in
-                            actionRow(icon: "checklist",
-                                      title: decision.summary,
-                                      detail: decision.quote,
-                                      badge: decisionBadge(decision.status))
+                            decisionRow(decision)
                         }
                     }
                 }
@@ -573,10 +615,7 @@ struct MeetingDetailView: View {
                     VStack(alignment: .leading, spacing: DS.s8) {
                         DSSectionLabel(text: "Follow-ups")
                         ForEach(followUps) { followUp in
-                            actionRow(icon: "bell",
-                                      title: followUp.title,
-                                      detail: "Due " + followUp.dueAt.formatted(date: .abbreviated, time: .shortened),
-                                      badge: followUpBadge(followUp.status))
+                            followUpRow(followUp)
                         }
                     }
                 }
@@ -587,8 +626,64 @@ struct MeetingDetailView: View {
         }
     }
 
-    private func actionRow(icon: String, title: String, detail: String?,
-                           badge: (String, Color)) -> some View {
+    /// A detected action item. Pending ones carry the review actions right
+    /// here (Prepare / Done myself / Dismiss) — the meeting page IS the
+    /// review now. Handled ones show their outcome.
+    private func decisionRow(_ decision: Decision) -> some View {
+        actionRow(icon: "checklist",
+                  title: decision.summary,
+                  detail: decision.quote) {
+            if decision.status == .detected {
+                Button("Prepare") { app.prepare(decision); reload() }
+                    .controlSize(.small)
+                Button {
+                    app.markDone(decision); reload()
+                } label: { Image(systemName: "checkmark.circle") }
+                    .buttonStyle(.borderless)
+                    .foregroundStyle(.green)
+                    .help("Done — I already did this myself")
+                Menu {
+                    ForEach(DismissReason.allCases, id: \.self) { reason in
+                        Button(reason.displayName) { app.dismiss(decision, reason: reason); reload() }
+                    }
+                } label: { Image(systemName: "xmark.circle") }
+                    .menuStyle(.button)
+                    .buttonStyle(.borderless)
+                    .controlSize(.small)
+                    .fixedSize()
+                    .help("Dismiss with a reason")
+            } else {
+                let badge = decisionBadge(decision.status)
+                DSChip(text: badge.0, tint: badge.1)
+            }
+        }
+    }
+
+    /// A time-referenced follow-up. Suggested ones confirm (→ reminder) or
+    /// dismiss inline; the rest show their state.
+    private func followUpRow(_ followUp: FollowUp) -> some View {
+        actionRow(icon: "bell",
+                  title: followUp.title,
+                  detail: "Due " + followUp.dueAt.formatted(date: .abbreviated, time: .shortened)) {
+            if followUp.status == .suggested {
+                Button("Remind me") { app.confirmFollowUp(followUp); reload() }
+                    .controlSize(.small)
+                Button {
+                    app.dismissFollowUp(followUp); reload()
+                } label: { Image(systemName: "xmark.circle") }
+                    .buttonStyle(.borderless)
+                    .help("Dismiss")
+            } else {
+                let badge = followUpBadge(followUp.status)
+                DSChip(text: badge.0, tint: badge.1)
+            }
+        }
+    }
+
+    private func actionRow<Trailing: View>(
+        icon: String, title: String, detail: String?,
+        @ViewBuilder trailing: () -> Trailing
+    ) -> some View {
         HStack(alignment: .top, spacing: DS.s12) {
             Image(systemName: icon)
                 .foregroundStyle(Color.brand)
@@ -601,7 +696,7 @@ struct MeetingDetailView: View {
                 }
             }
             Spacer()
-            DSChip(text: badge.0, tint: badge.1)
+            trailing()
         }
         .padding(DS.s12)
         .frame(maxWidth: .infinity, alignment: .leading)

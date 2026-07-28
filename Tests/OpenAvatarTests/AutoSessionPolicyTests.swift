@@ -35,8 +35,36 @@ final class AutoSessionPolicyTests: XCTestCase {
         XCTAssertEqual(p.tick(enabled: true, isListening: true, autoStarted: true, callActive: false), .stop)
     }
 
-    func testManualSessionsAreNeverAutoStopped() {
+    func testManualSessionWithNoCallIsNeverAutoStopped() {
+        // Dictation / testing: nothing ever holds the mic — recording is the
+        // user's business, never end it for them.
         var p = AutoSessionPolicy()
+        p.sessionStarted()
+        for _ in 0..<10 {
+            XCTAssertEqual(p.tick(enabled: true, isListening: true, autoStarted: false,
+                                  callActive: false), .none)
+        }
+    }
+
+    func testManualSessionStopsOnceItsCallEnds() {
+        // Regression: manually started call sessions used to record forever
+        // after the call ended (94-minute record for a 20-minute meeting).
+        var p = AutoSessionPolicy()
+        p.sessionStarted()
+        XCTAssertEqual(p.tick(enabled: true, isListening: true, autoStarted: false, callActive: true), .none)
+        for _ in 1..<AutoSessionPolicy.ticksToStop {
+            XCTAssertEqual(p.tick(enabled: true, isListening: true, autoStarted: false, callActive: false), .none)
+        }
+        XCTAssertEqual(p.tick(enabled: true, isListening: true, autoStarted: false, callActive: false), .stop)
+    }
+
+    func testCallSightingDoesNotCarryAcrossSessions() {
+        var p = AutoSessionPolicy()
+        p.sessionStarted()
+        _ = p.tick(enabled: true, isListening: true, autoStarted: false, callActive: true)
+        p.userStopped(callStillActive: false)
+        // New manual session, no call this time: must never auto-stop.
+        p.sessionStarted()
         for _ in 0..<10 {
             XCTAssertEqual(p.tick(enabled: true, isListening: true, autoStarted: false,
                                   callActive: false), .none)

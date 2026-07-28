@@ -60,15 +60,6 @@ final class WindowManager {
         }
     }
 
-    func showPostCallReview() {
-        show(id: "review", title: "Post-call review",
-             size: NSSize(width: 640, height: 600)) {
-            PostCallReviewView()
-                .environmentObject(AppState.shared)
-                .environmentObject(SettingsStore.shared)
-        }
-    }
-
     /// The per-call notes + live transcript window. With focus: false it
     /// appears behind the active app (the call) instead of stealing focus.
     func showCallWindow(focus: Bool = true) {
