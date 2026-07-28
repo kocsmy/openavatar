@@ -30,6 +30,17 @@ actor DecisionDetector {
         wakePhrase = phrase
     }
 
+    /// Forget the previous call's rolling context. Without this, the running
+    /// summary (which is fed into every detection prompt) carried across
+    /// sessions and re-seeded the OLD call's action items into the NEW call —
+    /// the "items from other calls in this call's summary" bug.
+    func beginCall() {
+        pendingSegmentCount = 0
+        runningSummary = ""
+        seenQuotes = []
+        lastSegmentAt = Date()
+    }
+
     /// Feed new segments; returns freshly detected decisions when a detection
     /// pass ran, otherwise [].
     func ingest(segments: [TranscriptSegment], callID: UUID) async throws -> [Decision] {
