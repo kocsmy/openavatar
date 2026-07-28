@@ -244,7 +244,7 @@ final class AppState: ObservableObject {
         }
         Task {
             do {
-                let event = try await calendar.currentEvent()
+                let event = try await calendar.currentEvent(calendarID: settings.calendarID)
                 currentEvent = event
                 callAttendees = event?.others(excludingSelfEmail: settings.calendarSelfEmail) ?? []
             } catch {
@@ -261,7 +261,7 @@ final class AppState: ObservableObject {
             return
         }
         Task {
-            if let events = try? await calendar.upcomingEvents() {
+            if let events = try? await calendar.upcomingEvents(calendarID: settings.calendarID) {
                 upcomingEvents = events
             }
         }

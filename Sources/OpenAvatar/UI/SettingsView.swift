@@ -534,6 +534,7 @@ struct SecretField: View {
 /// integration that reads context (who's on the call) instead of executing.
 struct GoogleCalendarSections: View {
     @EnvironmentObject var settings: SettingsStore
+    @EnvironmentObject var app: AppState
 
     @State private var clientSecret = ""
     @State private var clientSecretSaved = KeychainStore.shared.get(.googleClientSecret) != nil
@@ -541,6 +542,7 @@ struct GoogleCalendarSections: View {
     @State private var connecting = false
     @State private var status: String?
     @State private var eventPreview: String?
+    @State private var calendars: [CalendarInfo] = []
 
     private let hasBuiltInClient = GoogleOAuth.shared.hasBuiltInClient
 
@@ -572,6 +574,23 @@ struct GoogleCalendarSections: View {
                     if let eventPreview {
                         Text(eventPreview).font(.caption).foregroundStyle(.secondary)
                     }
+                    Picker("Calendar to use", selection: $settings.calendarID) {
+                        if !calendars.contains(where: { $0.id == settings.calendarID }) {
+                            // Keep the stored choice selectable until the list loads.
+                            Text(settings.calendarID == "primary" ? "Primary" : settings.calendarID)
+                                .tag(settings.calendarID)
+                        }
+                        ForEach(calendars) { cal in
+                            Text(cal.isPrimary ? "\(cal.name) (primary)" : cal.name).tag(cal.id)
+                        }
+                    }
+                    .onChange(of: settings.calendarID) { _, _ in
+                        app.refreshCalendar()
+                        app.refreshUpcomingEvents()
+                        eventPreview = nil
+                    }
+                    Text("Events, attendees, and the Home \"Coming up\" list all read from this calendar — pick your work calendar if that's where meetings live.")
+                        .font(.caption).foregroundStyle(.secondary)
                     Toggle("Identify who's on the call from my calendar", isOn: $settings.calendarEnabled)
                     Text("When you start listening, OpenAvatar looks up the current event and offers each attendee's name to label the voices it hears. On a 1:1 it pre-fills the other person automatically. It never changes your calendar.")
                         .font(.caption).foregroundStyle(.secondary)
@@ -619,6 +638,20 @@ struct GoogleCalendarSections: View {
             if connected && !settings.calendarEnabled {
                 settings.calendarEnabled = true
             }
+            loadCalendarList()
+        }
+    }
+
+    /// Populate the calendar picker (best-effort; the picker keeps the stored
+    /// id selectable while this loads).
+    private func loadCalendarList() {
+        guard connected else { return }
+        Task {
+            let client = GoogleCalendarClient(
+                tokenProvider: { try await GoogleOAuth.shared.accessToken() })
+            if let list = try? await client.listCalendars() {
+                calendars = list
+            }
         }
     }
 
@@ -665,6 +698,7 @@ struct GoogleCalendarSections: View {
                 connected = true
                 settings.calendarEnabled = true   // connecting implies you want it used
                 status = "Connected. Calendar look-up is ready."
+                loadCalendarList()
             } catch {
                 status = Redactor.redact(error.localizedDescription)
             }
@@ -679,7 +713,7 @@ struct GoogleCalendarSections: View {
             do {
                 let client = GoogleCalendarClient(
                     tokenProvider: { try await GoogleOAuth.shared.accessToken() })
-                if let event = try await client.currentEvent() {
+                if let event = try await client.currentEvent(calendarID: settings.calendarID) {
                     let names = event.others(excludingSelfEmail: settings.calendarSelfEmail)
                         .map(\.name).joined(separator: ", ")
                     eventPreview = "“\(event.title)” — \(names.isEmpty ? "no other attendees" : names)"

@@ -25,28 +25,31 @@ final class QwenSetupService: ObservableObject {
         }
     }
 
+    // Paths and installedness checks are pure/filesystem-only and read from
+    // the transcriber actor too — hence nonisolated despite the @MainActor class.
+
     /// Pinned bridge release so app updates don't silently change the runtime.
-    static let runtimeTarball =
+    nonisolated static let runtimeTarball =
         URL(string: "https://github.com/drguptavivek/qwen3-asr-mlx-runtime/archive/refs/heads/main.tar.gz")!
 
-    static var runtimeDir: URL {
+    nonisolated static var runtimeDir: URL {
         AppPaths.appSupport.appendingPathComponent("qwen3-asr-mlx-runtime", isDirectory: true)
     }
 
-    static var bridgeScriptURL: URL {
+    nonisolated static var bridgeScriptURL: URL {
         runtimeDir.appendingPathComponent("scripts/qwen3-asr-mlx-bridge")
     }
 
-    private static let uvCandidates = ["/opt/homebrew/bin/uv", "/usr/local/bin/uv"]
-    private static let brewCandidates = ["/opt/homebrew/bin/brew", "/usr/local/bin/brew"]
+    private nonisolated static let uvCandidates = ["/opt/homebrew/bin/uv", "/usr/local/bin/uv"]
+    private nonisolated static let brewCandidates = ["/opt/homebrew/bin/brew", "/usr/local/bin/brew"]
 
-    static var uvInstalled: Bool {
+    nonisolated static var uvInstalled: Bool {
         uvCandidates.contains { FileManager.default.isExecutableFile(atPath: $0) }
     }
 
     /// The runtime is on disk and uv exists — the bridge can be started.
     /// (Model weights may still download on first start.)
-    static var runtimeInstalled: Bool {
+    nonisolated static var runtimeInstalled: Bool {
         uvInstalled && FileManager.default.fileExists(atPath: bridgeScriptURL.path)
     }
 
