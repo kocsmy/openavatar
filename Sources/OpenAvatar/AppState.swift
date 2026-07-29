@@ -161,6 +161,7 @@ final class AppState: ObservableObject {
         } else {
             suggestedCallApp = detected?.appName
         }
+        updateCallPrompt(detected: detected)
 
         // Auto-start only on a STRONG signal (a known call app, or a browser
         // during a calendar event with a meeting link) — a random app opening
@@ -184,6 +185,49 @@ final class AppState: ObservableObject {
         case .none:
             break
         }
+    }
+
+    // MARK: Floating call prompt (Granola-style "Take notes?")
+
+    /// App name shown on the floating prompt; non-nil = panel visible.
+    @Published private(set) var callPromptApp: String?
+    /// The user closed the prompt for the ongoing call — don't nag again
+    /// until that call ends.
+    private var callPromptDismissed = false
+
+    private func updateCallPrompt(detected: CallDetector.DetectedCall?) {
+        if detected == nil { callPromptDismissed = false }   // call over → fresh slate
+        let show = CallPromptPolicy.shouldPrompt(
+            isListening: isListening,
+            callDetected: detected != nil,
+            strongSignal: detected?.strongCallSignal == true,
+            autoStartEnabled: settings.autoStartOnCall,
+            dismissed: callPromptDismissed)
+        setCallPrompt(show ? detected?.appName : nil)
+    }
+
+    private func setCallPrompt(_ appName: String?) {
+        guard callPromptApp != appName else { return }
+        callPromptApp = appName
+#if canImport(AppKit)
+        if appName != nil {
+            WindowManager.shared.showCallPrompt()
+        } else {
+            WindowManager.shared.hideCallPrompt()
+        }
+#endif
+    }
+
+    /// "Take notes" on the floating prompt.
+    func acceptCallPrompt() {
+        setCallPrompt(nil)
+        startListening()
+    }
+
+    /// ✕ on the floating prompt: silence it for the rest of this call.
+    func dismissCallPrompt() {
+        callPromptDismissed = true
+        setCallPrompt(nil)
     }
 
     /// Current best label for the app hosting this call (persisted on the record).
@@ -212,6 +256,7 @@ final class AppState: ObservableObject {
         previewEvent = nil   // the live call owns the notes window now
         sessionAutoStarted = auto
         autoPolicy.sessionStarted()
+        setCallPrompt(nil)   // recording answers the prompt
         do {
             // Label with whoever holds the mic right now; fall back to the
             // banner's suggestion. Refined again mid-call (refreshCallAppLabel).
@@ -312,9 +357,11 @@ final class AppState: ObservableObject {
         systemAudioActive = false
         if !auto {
             // The user hit Stop themselves. If the call is still going,
-            // auto-start must not fight them by restarting seconds later.
+            // auto-start must not fight them by restarting seconds later —
+            // and neither may the floating prompt.
             autoPolicy.userStopped(callStillActive: callDetector.detectActiveCall(
                 conferenceService: currentEvent?.conferenceService)?.strongCallSignal == true)
+            callPromptDismissed = true
         }
         sessionAutoStarted = false
         // Qwen's bridge holds ~4 GB; keep it warm only while it's the active

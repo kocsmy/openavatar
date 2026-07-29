@@ -60,6 +60,48 @@ final class WindowManager {
         }
     }
 
+    // MARK: Floating call prompt
+
+    private var callPromptPanel: NSPanel?
+
+    /// Small floating "Call detected — Take notes?" panel under the menu bar
+    /// (Granola-style). Non-activating: it never steals focus from the call.
+    func showCallPrompt() {
+        guard callPromptPanel == nil else { return }
+        let host = NSHostingController(rootView: CallPromptView()
+            .environmentObject(AppState.shared)
+            .environmentObject(SettingsStore.shared))
+        let panel = NSPanel(contentRect: .zero,
+                            styleMask: [.borderless, .nonactivatingPanel],
+                            backing: .buffered, defer: false)
+        panel.contentViewController = host
+        panel.isOpaque = false
+        panel.backgroundColor = .clear
+        panel.hasShadow = true
+        panel.level = .statusBar
+        panel.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary]
+        panel.isMovableByWindowBackground = true
+        panel.hidesOnDeactivate = false
+        panel.isReleasedWhenClosed = false
+        panel.animationBehavior = .utilityWindow
+
+        var size = host.view.fittingSize
+        if size.width < 100 { size = NSSize(width: 330, height: 56) }
+        panel.setContentSize(size)
+        if let screen = NSScreen.main {
+            let f = screen.visibleFrame
+            panel.setFrameOrigin(NSPoint(x: f.maxX - size.width - 16,
+                                         y: f.maxY - size.height - 12))
+        }
+        panel.orderFrontRegardless()
+        callPromptPanel = panel
+    }
+
+    func hideCallPrompt() {
+        callPromptPanel?.orderOut(nil)
+        callPromptPanel = nil
+    }
+
     /// The per-call notes + live transcript window. With focus: false it
     /// appears behind the active app (the call) instead of stealing focus.
     func showCallWindow(focus: Bool = true) {
