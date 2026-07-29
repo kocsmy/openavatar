@@ -53,6 +53,52 @@ final class CallDetectionTests: XCTestCase {
         XCTAssertEqual(detected?.appName, "Slack")
     }
 
+    // MARK: Helper processes (regression: raw bundle ids in the UI)
+
+    func testSlackHelperProcessMatchesSlack() {
+        // The mic is held by "<parent id>.helper", which isn't an
+        // NSRunningApplication — exact matching showed the raw bundle id.
+        let detected = CallDetector.classify(
+            micApps: [app("com.tinyspeck.slackmacgap.helper",
+                          "com.tinyspeck.slackmacgap.helper")],
+            conferenceService: nil)
+        XCTAssertEqual(detected?.appName, "Slack")
+        XCTAssertEqual(detected?.strongCallSignal, true)
+    }
+
+    func testArcHelperMatchesDespiteCaseAndSuffix() {
+        // Arc's helper reports "company.thebrowser.browser.helper" while the
+        // known browser id is "company.thebrowser.Browser".
+        let weak = CallDetector.classify(
+            micApps: [app("company.thebrowser.browser.helper",
+                          "company.thebrowser.browser.helper")],
+            conferenceService: nil)
+        XCTAssertEqual(weak?.appName, "Arc call")
+        XCTAssertEqual(weak?.strongCallSignal, false)
+
+        let meeting = CallDetector.classify(
+            micApps: [app("company.thebrowser.browser.helper",
+                          "company.thebrowser.browser.helper")],
+            conferenceService: "Google Meet")
+        XCTAssertEqual(meeting?.appName, "Google Meet")
+        XCTAssertEqual(meeting?.strongCallSignal, true)
+    }
+
+    func testUnknownHelperBundleIDGetsAReadableName() {
+        // Never show reverse-DNS in the UI, even for apps we don't know.
+        let detected = CallDetector.classify(
+            micApps: [app("com.example.coolvoip.helper", "com.example.coolvoip.helper")],
+            conferenceService: nil)
+        XCTAssertEqual(detected?.appName, "Coolvoip")
+    }
+
+    func testChromeCanaryPrefersItsExactEntryOverChromePrefix() {
+        let detected = CallDetector.classify(
+            micApps: [app("com.google.Chrome.canary", "Chrome Canary")],
+            conferenceService: nil)
+        XCTAssertEqual(detected?.appName, "Chrome Canary call")
+    }
+
     // MARK: Strong vs weak signals (auto-start gate)
 
     func testKnownCallAppIsAStrongSignal() {

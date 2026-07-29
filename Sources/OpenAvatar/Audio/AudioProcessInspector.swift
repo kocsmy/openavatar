@@ -47,10 +47,28 @@ enum AudioProcessInspector {
             guard pid != ownPID else { continue }
 
             let running = NSRunningApplication(processIdentifier: pid_t(pid))
-            let bundleID = running?.bundleIdentifier
+            var bundleID = running?.bundleIdentifier
                 ?? processBundleID(object)
                 ?? ""
-            let name = running?.localizedName ?? bundleID
+            var name = running?.localizedName ?? bundleID
+            // Helper processes (Slack Helper, Arc Helper, …) aren't
+            // NSRunningApplications, so they'd surface as raw bundle ids.
+            // Their id extends the parent app's id — resolve to the parent
+            // for a real name and the canonical bundle id.
+            if running == nil, !bundleID.isEmpty {
+                let lower = bundleID.lowercased()
+                let parent = NSWorkspace.shared.runningApplications
+                    .compactMap { app -> (app: NSRunningApplication, id: String)? in
+                        guard let id = app.bundleIdentifier?.lowercased(),
+                              lower == id || lower.hasPrefix(id + ".") else { return nil }
+                        return (app, id)
+                    }
+                    .max { $0.id.count < $1.id.count }?.app
+                if let parent {
+                    bundleID = parent.bundleIdentifier ?? bundleID
+                    name = parent.localizedName ?? name
+                }
+            }
             guard !name.isEmpty else { continue }
             found.append(MicActiveApp(bundleID: bundleID, name: name))
         }
