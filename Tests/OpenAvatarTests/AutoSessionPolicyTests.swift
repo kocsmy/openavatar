@@ -121,3 +121,44 @@ final class MarkdownNoteTests: XCTestCase {
                        [.bullet("nested detail")])
     }
 }
+
+/// The floating "Take notes?" prompt: shows exactly when a call is happening
+/// that auto-start will NOT handle, and never nags after a dismissal.
+final class CallPromptPolicyTests: XCTestCase {
+
+    func testWeakSignalPromptsEvenWithAutoStartOn() {
+        // Browser holding the mic without a calendar meeting: auto-start
+        // ignores it, so the prompt is the only way in.
+        XCTAssertTrue(CallPromptPolicy.shouldPrompt(
+            isListening: false, callDetected: true, strongSignal: false,
+            autoStartEnabled: true, dismissed: false))
+    }
+
+    func testStrongSignalWithAutoStartOnStaysQuiet() {
+        // Auto-start is about to handle it — prompting too would double up.
+        XCTAssertFalse(CallPromptPolicy.shouldPrompt(
+            isListening: false, callDetected: true, strongSignal: true,
+            autoStartEnabled: true, dismissed: false))
+    }
+
+    func testStrongSignalWithAutoStartOffPrompts() {
+        XCTAssertTrue(CallPromptPolicy.shouldPrompt(
+            isListening: false, callDetected: true, strongSignal: true,
+            autoStartEnabled: false, dismissed: false))
+    }
+
+    func testNeverPromptsWhileListeningOrWithoutACall() {
+        XCTAssertFalse(CallPromptPolicy.shouldPrompt(
+            isListening: true, callDetected: true, strongSignal: false,
+            autoStartEnabled: true, dismissed: false))
+        XCTAssertFalse(CallPromptPolicy.shouldPrompt(
+            isListening: false, callDetected: false, strongSignal: false,
+            autoStartEnabled: true, dismissed: false))
+    }
+
+    func testDismissalSilencesThePrompt() {
+        XCTAssertFalse(CallPromptPolicy.shouldPrompt(
+            isListening: false, callDetected: true, strongSignal: false,
+            autoStartEnabled: true, dismissed: true))
+    }
+}
