@@ -166,13 +166,16 @@ struct CallNotesWindowView: View {
                 .padding(.horizontal, DS.s16)
                 .padding(.vertical, DS.s8)
             if draft.isEmpty {
+                // Mirror the TextEditor's text origin exactly (its padding plus
+                // NSTextView's 5pt internal container inset) so the caret
+                // blinks at the placeholder's first character, not beside it.
                 Text(previewEvent == nil
                      ? "Write your own notes for this call — saved automatically."
                      : "Write your notes for this meeting ahead of time — saved automatically.")
                     .font(.body)
                     .foregroundStyle(.tertiary)
                     .padding(.horizontal, DS.s16 + 5)
-                    .padding(.vertical, DS.s16)
+                    .padding(.vertical, DS.s8)
                     .allowsHitTesting(false)
             }
         }
