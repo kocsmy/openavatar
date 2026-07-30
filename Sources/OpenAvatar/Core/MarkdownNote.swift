@@ -7,7 +7,8 @@ import Foundation
 enum MarkdownNote {
     enum Block: Equatable {
         case heading(String)
-        case bullet(String)
+        /// level 0 = top-level bullet, 1+ = nested detail bullet.
+        case bullet(String, Int)
         case text(String)
     }
 
@@ -19,7 +20,10 @@ enum MarkdownNote {
                 return .heading(String(line.dropFirst(marker.count)))
             }
             if line.hasPrefix("- ") || line.hasPrefix("* ") {
-                return .bullet(String(line.dropFirst(2)))
+                // Nesting from the leading indent (2 spaces or a tab per level).
+                let indent = rawLine.prefix { $0 == " " || $0 == "\t" }
+                    .reduce(0) { $0 + ($1 == "\t" ? 2 : 1) }
+                return .bullet(String(line.dropFirst(2)), min(2, indent / 2))
             }
             return .text(line)
         }

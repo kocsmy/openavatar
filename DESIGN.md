@@ -22,7 +22,10 @@ hover.
 - **Type roles** (all SF): `dsPageTitle` 26 bold (meeting page),
   `dsScreenTitle` 21 semibold (screen headers), `dsRowTitle` 13 medium,
   `dsBody` 13, `dsMeta` 11, plus `DSSectionLabel` (11 semibold uppercase,
-  kerned) for group labels. Don't invent sizes.
+  kerned) for group labels. Long-form reading (meeting notes, summaries)
+  uses `dsReading` 14 with 3pt line spacing and `dsReadingHeading` 15
+  semibold — documents read a step larger than UI chrome. Don't invent
+  sizes.
 - **Every clickable row** uses `DSRow` (card = persistent quiet surface that
   raises on hover; ghost = transparent until hovered). Hover + pressed states
   are non-negotiable.

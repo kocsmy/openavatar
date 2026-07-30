@@ -243,6 +243,7 @@ struct MeetingsTab: View {
     @EnvironmentObject var app: AppState
     @State private var calls: [ContextStore.CallRecord] = []
     @State private var selectedCallID: UUID?
+    @State private var pendingDelete: ContextStore.CallRecord?
 
     var body: some View {
         Group {
@@ -256,6 +257,21 @@ struct MeetingsTab: View {
             }
         }
         .onAppear { load() }
+        .confirmationDialog(
+            "Delete “\(pendingDelete?.displayTitle ?? "meeting")”?",
+            isPresented: Binding(get: { pendingDelete != nil },
+                                 set: { if !$0 { pendingDelete = nil } })) {
+            Button("Delete meeting", role: .destructive) {
+                if let call = pendingDelete {
+                    app.deleteMeeting(call.id)
+                    if selectedCallID == call.id { selectedCallID = nil }
+                    load()
+                }
+                pendingDelete = nil
+            }
+        } message: {
+            Text("The transcript, notes, and detected actions are removed. This can't be undone.")
+        }
     }
 
     private func load() {
@@ -339,6 +355,9 @@ struct MeetingsTab: View {
             }
             .padding(DS.s12)
         }
+        .contextMenu {
+            Button("Delete meeting…", role: .destructive) { pendingDelete = call }
+        }
     }
 
     private func rowMeta(_ call: ContextStore.CallRecord) -> [String] {
@@ -400,6 +419,7 @@ struct MeetingDetailView: View {
     @State private var decisions: [Decision] = []
     @State private var followUps: [FollowUp] = []
     @State private var message: String?
+    @State private var confirmingDelete = false
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
@@ -430,6 +450,22 @@ struct MeetingDetailView: View {
         // keep the page current as they do.
         .onChange(of: app.isConsolidating) { _, _ in reload() }
         .onChange(of: app.detectedDecisions.count) { _, _ in reload() }
+        .confirmationDialog("Delete “\(call.displayTitle)”?",
+                            isPresented: $confirmingDelete) {
+            Button("Delete meeting", role: .destructive) {
+                app.deleteMeeting(call.id)
+                if showsBack {
+                    onBack()
+                } else {
+#if canImport(AppKit)
+                    // Post-call window: the page IS the window — close it.
+                    WindowManager.shared.close(id: "call")
+#endif
+                }
+            }
+        } message: {
+            Text("The transcript, notes, and detected actions are removed. This can't be undone.")
+        }
     }
 
     private func reload() {
@@ -473,6 +509,10 @@ struct MeetingDetailView: View {
                         reload()
                     }
                     .disabled(app.isListening)
+                    Divider()
+                    Button("Delete meeting…", role: .destructive) {
+                        confirmingDelete = true
+                    }
                 } label: {
                     Image(systemName: "ellipsis.circle")
                 }
@@ -564,8 +604,8 @@ struct MeetingDetailView: View {
                         ForEach(Array(MeetingFormat.digestBullets(summary).enumerated()),
                                 id: \.offset) { _, item in
                             HStack(alignment: .top, spacing: DS.s8) {
-                                Text("•").foregroundStyle(Color.brand)
-                                Text(item).font(.dsBody)
+                                Text("•").font(.dsReading).foregroundStyle(Color.brand)
+                                Text(item).font(.dsReading).lineSpacing(3)
                                     .frame(maxWidth: .infinity, alignment: .leading)
                             }
                         }
@@ -579,7 +619,8 @@ struct MeetingDetailView: View {
                     VStack(alignment: .leading, spacing: DS.s6) {
                         DSSectionLabel(text: "My notes")
                         Text(mine)
-                            .font(.dsBody)
+                            .font(.dsReading)
+                            .lineSpacing(3)
                             .textSelection(.enabled)
                     }
                     .padding(DS.s12)

@@ -380,6 +380,22 @@ final class AppState: ObservableObject {
         let decisionsSnapshot = detectedDecisions
         Task {
             var callDecisions = decisionsSnapshot
+            // Accidental session: listening started but nothing was ever
+            // transcribed and no notes typed. Delete the empty record instead
+            // of leaving a blank meeting in the library, and skip the whole
+            // post-call pipeline.
+            if let callID,
+               ((try? store.allSegments(callID: callID)) ?? []).isEmpty,
+               ((try? store.callUserNotes(callID)) ?? "").isEmpty {
+                try? store.deleteCall(callID)
+                if currentCallID == callID {
+                    currentCallID = nil
+                    detectedDecisions = []
+                    pendingFollowUps = []
+                    reviewCallNotes = nil
+                }
+                return
+            }
             if let callID {
                 // Final detection pass.
                 if let fresh = try? await detector.flush(callID: callID) {
@@ -463,6 +479,21 @@ final class AppState: ObservableObject {
                     NSLog("Memory consolidation failed: %@", Redactor.redact(error.localizedDescription))
                 }
             }
+        }
+    }
+
+    // MARK: - Meetings
+
+    /// Delete a meeting and all its data. If it's the meeting currently shown
+    /// in the call window, clear that state too so the window doesn't show a
+    /// ghost.
+    func deleteMeeting(_ callID: UUID) {
+        try? store.deleteCall(callID)
+        if currentCallID == callID {
+            currentCallID = nil
+            detectedDecisions = []
+            pendingFollowUps = []
+            reviewCallNotes = nil
         }
     }
 
