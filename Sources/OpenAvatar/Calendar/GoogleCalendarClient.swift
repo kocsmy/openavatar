@@ -29,6 +29,9 @@ struct CalendarEvent: Sendable, Equatable, Identifiable {
     /// Conferencing service of the event ("Google Meet", "Zoom", …) when the
     /// event carries a meeting link — used to label browser-hosted calls.
     var conferenceService: String? = nil
+    /// The link to actually join the call — powers the pre-meeting prompt's
+    /// "Join" button.
+    var meetingURL: URL? = nil
 
     /// Everyone except the account owner — the people on the other end.
     func others(excludingSelfEmail selfEmail: String) -> [CalendarAttendee] {
@@ -161,7 +164,36 @@ struct GoogleCalendarClient: Sendable {
         }
         return CalendarEvent(id: id, title: title, start: start, end: end,
                              attendees: attendees,
-                             conferenceService: conferenceService(of: item))
+                             conferenceService: conferenceService(of: item),
+                             meetingURL: meetingURL(of: item))
+    }
+
+    /// The joinable link for the event: Google's explicit video entry point,
+    /// then the hangout link, then a meeting URL sniffed out of the location
+    /// or description (how Zoom/Teams invites usually arrive).
+    static func meetingURL(of item: JSONValue) -> URL? {
+        for entry in item["conferenceData"]?["entryPoints"]?.arrayValue ?? []
+        where entry["entryPointType"]?.stringValue == "video" {
+            if let uri = entry["uri"]?.stringValue, let url = URL(string: uri) {
+                return url
+            }
+        }
+        if let link = item["hangoutLink"]?.stringValue, let url = URL(string: link) {
+            return url
+        }
+        let meetingDomains = ["meet.google.com", "zoom.us", "teams.microsoft.com",
+                              "teams.live.com", "webex.com", "whereby.com", "around.co"]
+        for text in [item["location"]?.stringValue,
+                     item["description"]?.stringValue].compactMap({ $0 }) {
+            for raw in text.split(whereSeparator: { " \n\t<>\"'".contains($0) }) {
+                let token = String(raw)
+                guard token.hasPrefix("http"),
+                      meetingDomains.contains(where: token.contains),
+                      let url = URL(string: token) else { continue }
+                return url
+            }
+        }
+        return nil
     }
 
     /// Names the event's conferencing service. Google events state it

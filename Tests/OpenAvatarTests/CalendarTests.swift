@@ -29,6 +29,42 @@ final class CalendarTests: XCTestCase {
         XCTAssertEqual(others.first?.name, "Alice Ng")
     }
 
+    // MARK: Join link extraction (powers the pre-meeting prompt's CTA)
+
+    func testMeetingURLPrefersTheVideoEntryPoint() throws {
+        let json = try JSONValue.parse("""
+        {"conferenceData": {"entryPoints": [
+            {"entryPointType": "phone", "uri": "tel:+1-555-0100"},
+            {"entryPointType": "video", "uri": "https://meet.google.com/abc-defg-hij"}
+        ]}}
+        """)
+        XCTAssertEqual(GoogleCalendarClient.meetingURL(of: json)?.absoluteString,
+                       "https://meet.google.com/abc-defg-hij")
+    }
+
+    func testMeetingURLFallsBackToHangoutLink() throws {
+        let json = try JSONValue.parse("""
+        {"hangoutLink": "https://meet.google.com/xyz-abcd-efg"}
+        """)
+        XCTAssertEqual(GoogleCalendarClient.meetingURL(of: json)?.absoluteString,
+                       "https://meet.google.com/xyz-abcd-efg")
+    }
+
+    func testMeetingURLSniffedFromLocation() throws {
+        // Zoom invites usually land in location/description, not conferenceData.
+        let json = try JSONValue.parse("""
+        {"location": "https://acme.zoom.us/j/123456?pwd=abc"}
+        """)
+        XCTAssertEqual(GoogleCalendarClient.meetingURL(of: json)?.host, "acme.zoom.us")
+    }
+
+    func testNoMeetingURLForRoomOnlyEvents() throws {
+        let json = try JSONValue.parse("""
+        {"location": "Conference room 4B", "description": "Bring the slides https://docs.example.com/deck"}
+        """)
+        XCTAssertNil(GoogleCalendarClient.meetingURL(of: json))
+    }
+
     func testAttendeeNameFallsBackToEmailLocalPart() {
         let a = CalendarAttendee(email: "john.smith@corp.com", displayName: nil,
                                  isSelf: false, isOrganizer: false)
@@ -99,5 +135,45 @@ final class CalendarTests: XCTestCase {
 
         let solo = CalendarEvent(id: "e3", title: "Focus", start: nil, end: nil, attendees: [])
         XCTAssertNil(solo.participantSummary(excludingSelfEmail: "me@x.com"))
+    }
+}
+
+/// The pre-meeting prompt window: one minute before start through ten minutes
+/// after, once per event, never while recording.
+final class MeetingPromptPolicyTests: XCTestCase {
+
+    private let start = Date(timeIntervalSince1970: 1_800_000_000)
+
+    func testQuietBeforeTheLeadWindow() {
+        XCTAssertFalse(MeetingPromptPolicy.shouldPrompt(
+            eventStart: start, now: start.addingTimeInterval(-120),
+            isListening: false, alreadyPrompted: false))
+    }
+
+    func testPromptsOneMinuteBeforeStart() {
+        XCTAssertTrue(MeetingPromptPolicy.shouldPrompt(
+            eventStart: start, now: start.addingTimeInterval(-60),
+            isListening: false, alreadyPrompted: false))
+    }
+
+    func testStillOffersToLateJoiners() {
+        XCTAssertTrue(MeetingPromptPolicy.shouldPrompt(
+            eventStart: start, now: start.addingTimeInterval(300),
+            isListening: false, alreadyPrompted: false))
+    }
+
+    func testGivesUpAfterTheGraceWindow() {
+        XCTAssertFalse(MeetingPromptPolicy.shouldPrompt(
+            eventStart: start, now: start.addingTimeInterval(601),
+            isListening: false, alreadyPrompted: false))
+    }
+
+    func testNeverPromptsWhileRecordingOrTwice() {
+        XCTAssertFalse(MeetingPromptPolicy.shouldPrompt(
+            eventStart: start, now: start, isListening: true, alreadyPrompted: false))
+        XCTAssertFalse(MeetingPromptPolicy.shouldPrompt(
+            eventStart: start, now: start, isListening: false, alreadyPrompted: true))
+        XCTAssertFalse(MeetingPromptPolicy.shouldPrompt(
+            eventStart: nil, now: start, isListening: false, alreadyPrompted: false))
     }
 }

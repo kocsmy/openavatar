@@ -148,6 +148,9 @@ struct GeneralSettingsTab: View {
                 Toggle("Start transcribing automatically when a call starts", isOn: $settings.autoStartOnCall)
                 Text("When Zoom, Teams, Slack, or a browser meeting takes the microphone, notes start by themselves and stop when the call ends — you'll get a notification each time it happens. Turning this off keeps the manual Start button and the menu-bar suggestion.")
                     .font(.caption).foregroundStyle(.secondary)
+                Toggle("Offer to join upcoming meetings", isOn: $settings.meetingPromptEnabled)
+                Text("A minute before a calendar event starts, a small prompt shows the meeting and who's on it — one click opens the Zoom/Meet link with notes already running. Requires Google Calendar in Integrations.")
+                    .font(.caption).foregroundStyle(.secondary)
             }
             Section("Detection") {
                 Slider(value: $settings.confidenceThreshold, in: 0.3...0.9, step: 0.05) {
