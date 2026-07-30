@@ -185,6 +185,25 @@ final class ContextStore: @unchecked Sendable {
             try db.execute(sql: "ALTER TABLE llm_usage ADD COLUMN cache_read_tokens INTEGER NOT NULL DEFAULT 0")
             try db.execute(sql: "ALTER TABLE llm_usage ADD COLUMN cache_write_tokens INTEGER NOT NULL DEFAULT 0")
         }
+        // v10 — scrub Qwen3-ASR's "language X<asr_text>" envelope out of
+        // segments saved before the transcriber learned to strip it; pure
+        // no-speech markers ("language None<asr_text>") are deleted outright.
+        migrator.registerMigration("v10-qwen-envelope") { db in
+            let rows = try Row.fetchAll(db, sql: """
+                SELECT id, text FROM transcript_segments WHERE text LIKE '%<asr_text>%'
+                """)
+            for row in rows {
+                guard let id = row["id"] as String? else { continue }
+                let cleaned = Qwen3Transcriber.cleanOutput(row["text"] as String? ?? "")
+                if cleaned.isEmpty {
+                    try db.execute(sql: "DELETE FROM transcript_segments WHERE id = ?",
+                                   arguments: [id])
+                } else {
+                    try db.execute(sql: "UPDATE transcript_segments SET text = ? WHERE id = ?",
+                                   arguments: [cleaned, id])
+                }
+            }
+        }
         try migrator.migrate(dbQueue)
     }
 
