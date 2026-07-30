@@ -127,8 +127,9 @@ final class MemoryTests: XCTestCase {
     func testConsolidatorDemandsFullCoverage() {
         // Regression: 24k-char transcript cap dropped the first half of long
         // calls, and notes weren't required — long meetings came back with a
-        // couple of thin bullets.
-        XCTAssertGreaterThanOrEqual(MemoryConsolidator.maxTranscriptChars, 48_000)
+        // couple of thin bullets. The cap is a safety rail against runaway
+        // sessions, NOT a meeting budget: 2-hour calls must pass through whole.
+        XCTAssertGreaterThanOrEqual(MemoryConsolidator.maxTranscriptChars, 150_000)
         XCTAssertTrue(MemoryConsolidator.systemPrompt.contains("ENTIRE transcript"))
         XCTAssertTrue(MemoryConsolidator.systemPrompt.contains("## Next steps"))
         let required = MemoryConsolidator.updateMemoryTool.parameters["required"]?
