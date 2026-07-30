@@ -178,6 +178,13 @@ final class ContextStore: @unchecked Sendable {
                 )
                 """)
         }
+        // v9 — prompt-cache accounting: cached reads bill at ~10% of the
+        // input price, so cost reporting must separate them from full-price
+        // input tokens.
+        migrator.registerMigration("v9-usage-cache") { db in
+            try db.execute(sql: "ALTER TABLE llm_usage ADD COLUMN cache_read_tokens INTEGER NOT NULL DEFAULT 0")
+            try db.execute(sql: "ALTER TABLE llm_usage ADD COLUMN cache_write_tokens INTEGER NOT NULL DEFAULT 0")
+        }
         try migrator.migrate(dbQueue)
     }
 
@@ -850,11 +857,44 @@ final class ContextStore: @unchecked Sendable {
         try dbQueue.write { db in
             try db.execute(
                 sql: """
-                INSERT INTO llm_usage (at, provider, model, task, input_tokens, output_tokens)
-                VALUES (?, ?, ?, ?, ?, ?)
+                INSERT INTO llm_usage (at, provider, model, task, input_tokens, output_tokens,
+                                       cache_read_tokens, cache_write_tokens)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 arguments: [Date().timeIntervalSince1970, provider.rawValue, model,
-                            task.rawValue, usage.inputTokens, usage.outputTokens])
+                            task.rawValue, usage.inputTokens, usage.outputTokens,
+                            usage.cacheReadTokens, usage.cacheWriteTokens])
+        }
+    }
+
+    /// Per-task token totals for the usage panel in Settings → Models.
+    struct TaskUsage: Identifiable, Sendable {
+        var task: String
+        var calls: Int
+        var inputTokens: Int
+        var outputTokens: Int
+        var cacheReadTokens: Int
+        var id: String { task }
+    }
+
+    func usageByTask(sinceDays: Int = 7) throws -> [TaskUsage] {
+        let since = Date().timeIntervalSince1970 - Double(sinceDays) * 86_400
+        return try dbQueue.read { db in
+            let rows = try Row.fetchAll(db, sql: """
+                SELECT task, COUNT(*) AS calls,
+                       SUM(input_tokens) AS input_tokens,
+                       SUM(output_tokens) AS output_tokens,
+                       SUM(cache_read_tokens) AS cache_read_tokens
+                FROM llm_usage WHERE at >= ?
+                GROUP BY task ORDER BY input_tokens + output_tokens DESC
+                """, arguments: [since])
+            return rows.map { row in
+                TaskUsage(task: row["task"] as String? ?? "",
+                          calls: row["calls"] as Int? ?? 0,
+                          inputTokens: row["input_tokens"] as Int? ?? 0,
+                          outputTokens: row["output_tokens"] as Int? ?? 0,
+                          cacheReadTokens: row["cache_read_tokens"] as Int? ?? 0)
+            }
         }
     }
 

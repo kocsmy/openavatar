@@ -766,6 +766,7 @@ struct ModelsSettingsTab: View {
     @State private var status: [ProviderID: String] = [:]
     @State private var routeTestResults: [LLMTask: String] = [:]
     @State private var testingRoutes = false
+    @State private var usage: [ContextStore.TaskUsage] = []
 
     var body: some View {
         Form {
@@ -812,9 +813,46 @@ struct ModelsSettingsTab: View {
                 Text("If a call fails mid-call, the full API error appears here and in the menu-bar popover — no more truncated messages.")
                     .font(.caption).foregroundStyle(.secondary)
             }
+
+            Section("Usage — last 7 days") {
+                if usage.isEmpty {
+                    Text("No LLM calls recorded yet.")
+                        .font(.caption).foregroundStyle(.secondary)
+                } else {
+                    ForEach(usage) { row in
+                        HStack {
+                            Text(LLMTask(rawValue: row.task)?.displayName ?? row.task)
+                                .frame(width: 210, alignment: .leading)
+                            Spacer()
+                            DSMetaLine(parts: usageParts(row))
+                        }
+                    }
+                    Text("Cached input bills at roughly a tenth of the normal price (Anthropic reports it explicitly; OpenAI and Gemini cache long stable prefixes automatically without reporting).")
+                        .font(.caption).foregroundStyle(.secondary)
+                }
+            }
         }
         .formStyle(.grouped)
         .padding()
+        .onAppear { usage = (try? app.store.usageByTask(sinceDays: 7)) ?? [] }
+    }
+
+    private func usageParts(_ row: ContextStore.TaskUsage) -> [String] {
+        var parts = ["\(row.calls) calls",
+                     "\(Self.compact(row.inputTokens)) in",
+                     "\(Self.compact(row.outputTokens)) out"]
+        if row.cacheReadTokens > 0 {
+            parts.append("\(Self.compact(row.cacheReadTokens)) cached")
+        }
+        return parts
+    }
+
+    static func compact(_ tokens: Int) -> String {
+        switch tokens {
+        case ..<1_000: return "\(tokens)"
+        case ..<1_000_000: return String(format: "%.1fk", Double(tokens) / 1_000)
+        default: return String(format: "%.1fM", Double(tokens) / 1_000_000)
+        }
     }
 
     private func statusText(_ s: String) -> some View {

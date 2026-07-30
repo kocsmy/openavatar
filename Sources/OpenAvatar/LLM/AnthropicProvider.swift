@@ -24,7 +24,20 @@ struct AnthropicProvider: LLMProvider {
         if let temperature = req.temperature {
             body["temperature"] = .number(temperature)
         }
-        if !req.system.isEmpty { body["system"] = .string(req.system) }
+        if !req.system.isEmpty {
+            if req.cachePrefix {
+                // cache_control on the last system block caches the whole
+                // prefix (tools render before system), so repeated calls with
+                // an identical prompt bill the prefix at ~10% after the first.
+                body["system"] = .array([.object([
+                    "type": "text",
+                    "text": .string(req.system),
+                    "cache_control": .object(["type": "ephemeral"])
+                ])])
+            } else {
+                body["system"] = .string(req.system)
+            }
+        }
         if !req.tools.isEmpty {
             body["tools"] = .array(req.tools.map { tool in
                 .object(["name": .string(tool.name),
@@ -85,7 +98,9 @@ struct AnthropicProvider: LLMProvider {
         }
         let usage = Usage(
             inputTokens: json["usage"]?["input_tokens"]?.intValue ?? 0,
-            outputTokens: json["usage"]?["output_tokens"]?.intValue ?? 0)
+            outputTokens: json["usage"]?["output_tokens"]?.intValue ?? 0,
+            cacheReadTokens: json["usage"]?["cache_read_input_tokens"]?.intValue ?? 0,
+            cacheWriteTokens: json["usage"]?["cache_creation_input_tokens"]?.intValue ?? 0)
         return LLMResponse(text: text, toolCalls: toolCalls, usage: usage,
                            model: json["model"]?.stringValue ?? "")
     }
