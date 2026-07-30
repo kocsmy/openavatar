@@ -124,6 +124,39 @@ final class MemoryTests: XCTestCase {
         XCTAssertLessThanOrEqual(MemoryConsolidator.maxFactPromptChars, 9_000)
     }
 
+    func testConsolidatorDemandsFullCoverage() {
+        // Regression: 24k-char transcript cap dropped the first half of long
+        // calls, and notes weren't required — long meetings came back with a
+        // couple of thin bullets.
+        XCTAssertGreaterThanOrEqual(MemoryConsolidator.maxTranscriptChars, 48_000)
+        XCTAssertTrue(MemoryConsolidator.systemPrompt.contains("ENTIRE transcript"))
+        XCTAssertTrue(MemoryConsolidator.systemPrompt.contains("## Next steps"))
+        let required = MemoryConsolidator.updateMemoryTool.parameters["required"]?
+            .arrayValue?.compactMap(\.stringValue) ?? []
+        XCTAssertTrue(required.contains("notes"))
+    }
+
+    func testDeleteCallRemovesEverything() throws {
+        let callID = try store.startCall(app: "Zoom")
+        try store.insert([TranscriptSegment(text: "hello there", t0: 0, t1: 1,
+                                            source: .mic, confidence: 0.9)],
+                         callID: callID)
+        try store.insert(Decision(callID: callID, quote: "I'll send it",
+                                  intent: .sendEmail, summary: "Send the doc",
+                                  assigneeHint: nil, confidence: 0.9,
+                                  addressedToAssistant: false, source: .mic))
+        try store.insertFollowUp(FollowUp(callID: callID, title: "Check tomorrow",
+                                          quote: nil, dueAt: Date().addingTimeInterval(86_400)))
+        try store.insertDigest(callID: callID, digest: "A call happened.")
+
+        try store.deleteCall(callID)
+
+        XCTAssertNil(try store.listCalls(limit: 50).first { $0.id == callID })
+        XCTAssertTrue(try store.allSegments(callID: callID).isEmpty)
+        XCTAssertTrue(try store.decisions(callID: callID).isEmpty)
+        XCTAssertTrue(try store.followUps(callID: callID).isEmpty)
+    }
+
     func testFactMatchByIDPrefix() {
         let fact = MemoryFact(category: .person, content: "Anna runs design", salience: 2)
         XCTAssertNotNil(MemoryConsolidator.match(String(fact.id.uuidString.prefix(8)), in: [fact]))

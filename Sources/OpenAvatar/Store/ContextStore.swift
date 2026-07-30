@@ -422,6 +422,21 @@ final class ContextStore: @unchecked Sendable {
         }
     }
 
+    /// Delete a meeting and everything hanging off it — transcript, detected
+    /// items, follow-ups, digest. Used both by the explicit "Delete meeting"
+    /// action and to discard accidental empty sessions. Speaker profiles are
+    /// left alone (they span calls).
+    func deleteCall(_ callID: UUID) throws {
+        try dbQueue.write { db in
+            let id = callID.uuidString
+            try db.execute(sql: "DELETE FROM transcript_segments WHERE call_id = ?", arguments: [id])
+            try db.execute(sql: "DELETE FROM decisions WHERE call_id = ?", arguments: [id])
+            try db.execute(sql: "DELETE FROM followups WHERE call_id = ?", arguments: [id])
+            try db.execute(sql: "DELETE FROM call_digests WHERE call_id = ?", arguments: [id])
+            try db.execute(sql: "DELETE FROM calls WHERE id = ?", arguments: [id])
+        }
+    }
+
     /// Remove segments that turned out to be chunk-overlap duplicates of a
     /// newer, fuller decode (see TranscriptSanitizer).
     func deleteSegments(_ ids: [UUID]) throws {

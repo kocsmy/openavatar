@@ -19,6 +19,8 @@ actor MemoryConsolidator {
     /// enough of it to dedupe and reinforce — highest-salience facts first.
     static let maxFactsInPrompt = 150
     static let maxFactPromptChars = 9_000
+    /// Enough for ~1 hour of speech, so notes cover the whole meeting.
+    static let maxTranscriptChars = 48_000
 
     init(router: LLMRouter, store: ContextStore) {
         self.router = router
@@ -44,10 +46,17 @@ actor MemoryConsolidator {
             return Outcome(digest: "", factsAdded: 0, factsReinforced: 0, factsRetired: 0)
         }
 
-        // Cap transcript input; keep the shape (speakers + times).
+        // Cap transcript input; keep the shape (speakers + times). The cap
+        // keeps the TAIL, so it must be generous: a one-hour call runs
+        // ~50-60k chars, and the old 24k cap silently dropped the first half
+        // of long meetings — notes then skewed thin and end-heavy (regression:
+        // a 56-min sync summarized mostly by its casual last ten minutes).
         let transcript = segments.map { "[\($0.speakerLabel)] \($0.text)" }
             .joined(separator: "\n")
-        let cappedTranscript = String(transcript.suffix(24_000))
+        var cappedTranscript = String(transcript.suffix(Self.maxTranscriptChars))
+        if cappedTranscript.count < transcript.count {
+            cappedTranscript = "(earliest part of a very long call omitted)\n" + cappedTranscript
+        }
 
         let existing = (try? store.activeFacts(limit: Self.maxFactsInPrompt)) ?? []
         var existingList = ""
@@ -103,7 +112,7 @@ actor MemoryConsolidator {
                 """)],
             tools: [Self.updateMemoryTool],
             toolChoice: .required,
-            maxTokens: 4096)
+            maxTokens: 6144)
 
         let response = try await router.complete(task: .summary, request)
         guard let call = response.toolCalls.first(where: { $0.name == "update_memory" }) else {
@@ -134,7 +143,7 @@ actor MemoryConsolidator {
 
         let notes = arguments["notes"]?.stringValue ?? ""
         if !notes.isEmpty {
-            try store.updateCallNotes(callID, notes: String(notes.prefix(8_000)))
+            try store.updateCallNotes(callID, notes: String(notes.prefix(16_000)))
         }
 
         var added = 0, reinforced = 0, retired = 0
@@ -186,15 +195,26 @@ actor MemoryConsolidator {
         Produce, in a single update_memory call:
         1. digest — a ≤120-word summary of this call: topics, decisions, outcomes, \
         who was involved.
-        2. notes — structured meeting notes in Markdown, like a sharp colleague's \
-        minutes. ALWAYS open with a "## Summary" section: 3–6 tight bullets \
-        covering what the meeting was about and what came out of it (outcomes, \
-        decisions, headline numbers). Then one "## Topic" section per major \
-        topic discussed (2–6 sections), each with terse "- " bullets capturing \
-        the substance: concrete numbers, names, dates, decisions made, \
-        disagreements, and next steps. Prefer specifics over generalities \
-        ("churn at 3.2%, up from 2.8%" not "churn discussed"). No preamble, no \
-        filler bullets, nothing invented.
+        2. notes — REQUIRED, never empty when there is a transcript: structured \
+        meeting notes in Markdown, like a sharp colleague's minutes. Structure:
+           - Open with a "## Summary" section: 3–6 tight bullets covering what \
+        the meeting was about and what came out of it (outcomes, decisions, \
+        headline numbers).
+           - Then one "## Topic" section per major topic, in the order discussed. \
+        Under each, terse "- " bullets carry the substance — concrete numbers, \
+        names, dates, decisions, disagreements — and two-space-indented "  - " \
+        sub-bullets carry supporting detail, causes, and caveats under their \
+        parent point.
+           - Close with a "## Next steps" section when anything forward-looking \
+        was agreed: one bullet per item, with the owner's name when clear.
+        COVERAGE MATTERS: work through the ENTIRE transcript, start to finish — \
+        a 30–60 minute discussion warrants 4–8 topic sections of several bullets \
+        each, and even a short call gets a real Summary plus at least one topic \
+        section. Never compress a substantial meeting into a handful of lines, \
+        and never let the end of the call (often small talk) crowd out the \
+        earlier substance. Prefer specifics over generalities ("churn at 3.2%, \
+        up from 2.8%" not "churn discussed"). No preamble, no filler bullets, \
+        nothing invented.
         3. facts — durable knowledge worth remembering across calls, as operations:
            - add: a NEW fact not already in memory. Categories: identity (role/team), \
         preference (how they like things done), project (active work), person \
@@ -229,7 +249,7 @@ actor MemoryConsolidator {
             "properties": .object([
                 "digest": .object(["type": "string", "description": "≤120-word call summary"]),
                 "notes": .object(["type": "string",
-                                  "description": "Structured Markdown meeting notes: a '## Summary' section first (3-6 outcome bullets), then '## Topic' sections with '- ' detail bullets (numbers, names, decisions, next steps)"]),
+                                  "description": "Structured Markdown meeting notes covering the WHOLE meeting: a '## Summary' section first (3-6 outcome bullets), then '## Topic' sections in discussion order with '- ' detail bullets and '  - ' indented sub-bullets, then '## Next steps' with owners. Required — never empty."]),
                 "facts": .object([
                     "type": "array",
                     "items": .object([
@@ -275,6 +295,6 @@ actor MemoryConsolidator {
                     ])
                 ])
             ]),
-            "required": .array(["digest", "facts"])
+            "required": .array(["digest", "notes", "facts"])
         ]))
 }

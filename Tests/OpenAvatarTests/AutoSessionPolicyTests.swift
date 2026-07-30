@@ -105,8 +105,8 @@ final class MarkdownNoteTests: XCTestCase {
         """)
         XCTAssertEqual(blocks, [
             .heading("June ARR Summary"),
-            .bullet("Self-serve landed at $612k"),
-            .bullet("Churn still an issue"),
+            .bullet("Self-serve landed at $612k", 0),
+            .bullet("Churn still an issue", 0),
             .text("Some plain line."),
             .heading("Next steps")
         ])
@@ -116,9 +116,22 @@ final class MarkdownNoteTests: XCTestCase {
         XCTAssertEqual(MarkdownNote.parse("\n   \n\n"), [])
     }
 
-    func testIndentedBulletsStillParse() {
-        XCTAssertEqual(MarkdownNote.parse("  - nested detail"),
-                       [.bullet("nested detail")])
+    func testIndentedBulletsCarryTheirNestingLevel() {
+        // Granola-style sub-bullets: supporting detail sits under its parent.
+        XCTAssertEqual(MarkdownNote.parse("""
+        - Cookie consent caused the GA4 traffic drop
+          - Bots don't accept cookies, so bot traffic is now excluded
+        \t- Unique visitors dropped from ~50k to ~20k
+        """), [
+            .bullet("Cookie consent caused the GA4 traffic drop", 0),
+            .bullet("Bots don't accept cookies, so bot traffic is now excluded", 1),
+            .bullet("Unique visitors dropped from ~50k to ~20k", 1)
+        ])
+    }
+
+    func testNestingIsCappedAtTwoLevels() {
+        XCTAssertEqual(MarkdownNote.parse("        - very deep"),
+                       [.bullet("very deep", 2)])
     }
 }
 

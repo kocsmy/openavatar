@@ -56,6 +56,11 @@ extension Font {
     static let dsBody = Font.system(size: 13)
     /// Metadata lines.
     static let dsMeta = Font.system(size: 11)
+    /// Long-form reading (meeting notes, summaries) — larger than UI chrome
+    /// because these are documents people actually read, not controls.
+    static let dsReading = Font.system(size: 14)
+    /// Section headings inside long-form reading.
+    static let dsReadingHeading = Font.system(size: 15, weight: .semibold)
 }
 
 // MARK: - Section label

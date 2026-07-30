@@ -58,7 +58,11 @@ struct SettingsView: View {
             detail
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
         }
-        .frame(width: 960, height: 660)
+        // Flexible frame so the window can actually be resized — a fixed
+        // 960x660 made the whole Settings window rigid; long meeting pages
+        // deserve as much screen as the user wants to give them.
+        .frame(minWidth: 960, idealWidth: 1040, maxWidth: .infinity,
+               minHeight: 660, idealHeight: 720, maxHeight: .infinity)
         .tint(.brand)
     }
 
