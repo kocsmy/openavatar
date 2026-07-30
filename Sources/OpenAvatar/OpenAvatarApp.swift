@@ -22,12 +22,6 @@ struct OpenAvatarApp: App {
             Image(systemName: app.isListening ? "waveform.circle.fill" : "waveform.circle")
         }
         .menuBarExtraStyle(.window)
-
-        Settings {
-            SettingsView()
-                .environmentObject(app)
-                .environmentObject(settings)
-        }
     }
 }
 
@@ -102,6 +96,19 @@ final class WindowManager {
         callPromptPanel = nil
     }
 
+    /// The main app window (Home, Meetings, Settings…). Hosted here as a
+    /// plain NSWindow instead of SwiftUI's `Settings` scene, whose window
+    /// ignores content flexibility and could never be resized.
+    func showMain() {
+        show(id: "main", title: "OpenAvatar",
+             size: NSSize(width: 1080, height: 720),
+             minSize: NSSize(width: 960, height: 660)) {
+            SettingsView()
+                .environmentObject(AppState.shared)
+                .environmentObject(SettingsStore.shared)
+        }
+    }
+
     /// The per-call notes + live transcript window. With focus: false it
     /// appears behind the active app (the call) instead of stealing focus.
     func showCallWindow(focus: Bool = true) {
@@ -119,6 +126,7 @@ final class WindowManager {
     }
 
     private func show<Content: View>(id: String, title: String, size: NSSize,
+                                     minSize: NSSize? = nil,
                                      focus: Bool = true,
                                      @ViewBuilder content: () -> Content) {
         if let existing = windows[id] {
@@ -136,7 +144,11 @@ final class WindowManager {
             backing: .buffered, defer: false)
         window.title = title
         window.isReleasedWhenClosed = false
+        if let minSize { window.contentMinSize = minSize }
         window.center()
+        // Remember the user's chosen frame across launches (set after
+        // center() so a saved frame wins over the default placement).
+        window.setFrameAutosaveName("openavatar.window.\(id)")
         window.contentView = NSHostingView(rootView: content())
         windows[id] = window
         if focus {

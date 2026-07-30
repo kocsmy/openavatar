@@ -19,8 +19,12 @@ actor MemoryConsolidator {
     /// enough of it to dedupe and reinforce — highest-salience facts first.
     static let maxFactsInPrompt = 150
     static let maxFactPromptChars = 9_000
-    /// Enough for ~1 hour of speech, so notes cover the whole meeting.
-    static let maxTranscriptChars = 48_000
+    /// Not a meeting-length budget — a SAFETY rail. Real meetings pass through
+    /// whole: ~150k chars covers ~2.5-3 hours of continuous speech. The cap
+    /// only bites on runaway sessions (a forgotten 28-hour session once
+    /// produced a transcript that would blow any model's context window and
+    /// the API bill with it).
+    static let maxTranscriptChars = 150_000
 
     init(router: LLMRouter, store: ContextStore) {
         self.router = router
@@ -55,7 +59,7 @@ actor MemoryConsolidator {
             .joined(separator: "\n")
         var cappedTranscript = String(transcript.suffix(Self.maxTranscriptChars))
         if cappedTranscript.count < transcript.count {
-            cappedTranscript = "(earliest part of a very long call omitted)\n" + cappedTranscript
+            cappedTranscript = "(earliest part of an abnormally long session omitted)\n" + cappedTranscript
         }
 
         let existing = (try? store.activeFacts(limit: Self.maxFactsInPrompt)) ?? []
@@ -112,7 +116,7 @@ actor MemoryConsolidator {
                 """)],
             tools: [Self.updateMemoryTool],
             toolChoice: .required,
-            maxTokens: 6144)
+            maxTokens: 8192)
 
         let response = try await router.complete(task: .summary, request)
         guard let call = response.toolCalls.first(where: { $0.name == "update_memory" }) else {
