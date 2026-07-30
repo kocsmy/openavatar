@@ -160,6 +160,7 @@ final class AppState: ObservableObject {
             suggestedCallApp = detected?.appName
         }
         updateCallPrompt(detected: detected)
+        meetingPromptTick()
 
         // Auto-start only on a STRONG signal (a known call app, or a browser
         // during a calendar event with a meeting link) — a random app opening
@@ -228,6 +229,82 @@ final class AppState: ObservableObject {
         setCallPrompt(nil)
     }
 
+    // MARK: Pre-meeting prompt ("starts in a minute — join?")
+
+    /// The event currently offered on the floating panel; non-nil = visible.
+    @Published private(set) var meetingPrompt: CalendarEvent?
+    /// Events already offered this run — one prompt per event, ever.
+    private var promptedEventIDs: Set<String> = []
+    private var upcomingRefreshedAt: Date?
+
+    private func meetingPromptTick() {
+        guard settings.meetingPromptEnabled, settings.calendarEnabled,
+              GoogleOAuth.shared.isConnected else {
+            setMeetingPrompt(nil)
+            return
+        }
+        // Keep the upcoming-events cache fresh in the background (the Home
+        // view only refreshes it when opened).
+        let now = Date()
+        if upcomingRefreshedAt.map({ now.timeIntervalSince($0) > 300 }) ?? true {
+            upcomingRefreshedAt = now
+            refreshUpcomingEvents()
+        }
+
+        // Recording already answers the question; and once the offer window
+        // has passed, take the panel down on its own.
+        if isListening {
+            setMeetingPrompt(nil)
+            return
+        }
+        if let shown = meetingPrompt, let start = shown.start,
+           now > start.addingTimeInterval(MeetingPromptPolicy.graceSeconds) {
+            setMeetingPrompt(nil)
+        }
+        guard meetingPrompt == nil else { return }
+
+        if let next = upcomingEvents.first(where: { event in
+            MeetingPromptPolicy.shouldPrompt(eventStart: event.start, now: now,
+                                             isListening: isListening,
+                                             alreadyPrompted: promptedEventIDs.contains(event.id))
+        }) {
+            promptedEventIDs.insert(next.id)
+            setMeetingPrompt(next)
+        }
+    }
+
+    private func setMeetingPrompt(_ event: CalendarEvent?) {
+        guard meetingPrompt?.id != event?.id else { return }
+        meetingPrompt = event
+#if canImport(AppKit)
+        if event != nil {
+            WindowManager.shared.showMeetingPrompt()
+        } else {
+            WindowManager.shared.hideMeetingPrompt()
+        }
+#endif
+    }
+
+    /// "Join & take notes": open the meeting link and start recording in one
+    /// go — the later "call detected" prompt stays quiet because we're
+    /// already listening.
+    func joinMeeting(_ event: CalendarEvent) {
+        setMeetingPrompt(nil)
+#if canImport(AppKit)
+        if let url = event.meetingURL {
+            NSWorkspace.shared.open(url)
+        }
+#endif
+        if !isListening {
+            startListening()
+        }
+    }
+
+    /// ✕ on the pre-meeting prompt: skip this event (it won't come back).
+    func dismissMeetingPrompt() {
+        setMeetingPrompt(nil)
+    }
+
     /// Current best label for the app hosting this call (persisted on the record).
     private var currentCallAppLabel: String?
 
@@ -254,7 +331,8 @@ final class AppState: ObservableObject {
         previewEvent = nil   // the live call owns the notes window now
         sessionAutoStarted = auto
         autoPolicy.sessionStarted()
-        setCallPrompt(nil)   // recording answers the prompt
+        setCallPrompt(nil)      // recording answers the prompt
+        setMeetingPrompt(nil)   // …and the pre-meeting one too
         do {
             // Label with whoever holds the mic right now; fall back to the
             // banner's suggestion. Refined again mid-call (refreshCallAppLabel).

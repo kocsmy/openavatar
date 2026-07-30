@@ -115,6 +115,9 @@ final class SettingsStore: ObservableObject {
     /// call starting), and stop when the call ends. Auto-started sessions
     /// always post a notification — capture is never silent.
     @Published var autoStartOnCall: Bool { didSet { defaults.set(autoStartOnCall, forKey: "autoStartOnCall") } }
+    /// A minute before a calendar event starts, offer a floating prompt with
+    /// the meeting's name and a "Join & take notes" button.
+    @Published var meetingPromptEnabled: Bool { didSet { defaults.set(meetingPromptEnabled, forKey: "meetingPromptEnabled") } }
 
     // MARK: Integrations (non-secret parts)
     @Published var githubDefaultRepo: String { didSet { defaults.set(githubDefaultRepo, forKey: "githubDefaultRepo") } }
@@ -163,6 +166,7 @@ final class SettingsStore: ObservableObject {
         calendarID = defaults.string(forKey: "calendarID") ?? "primary"
 
         autoStartOnCall = (defaults.object(forKey: "autoStartOnCall") as? Bool) ?? true
+        meetingPromptEnabled = (defaults.object(forKey: "meetingPromptEnabled") as? Bool) ?? true
 
         githubDefaultRepo = defaults.string(forKey: "githubDefaultRepo") ?? ""
         linearTeamKey = defaults.string(forKey: "linearTeamKey") ?? ""
