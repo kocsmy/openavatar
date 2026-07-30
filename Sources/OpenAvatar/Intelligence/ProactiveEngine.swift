@@ -1,7 +1,7 @@
 import Foundation
 
 /// A suggestion the assistant surfaces on its own initiative, derived from
-/// open commitments and recent call digests. Proactivity never bypasses the
+/// open commitments. Proactivity never bypasses the
 /// trust ladder: suggestions only become actions through the normal
 /// prepare → preview → approve flow, always Ask-first.
 struct ProactiveSuggestion: Identifiable, Sendable {
@@ -36,9 +36,12 @@ actor ProactiveEngine {
     }
 
     func suggestions(maxCount: Int = 3) async throws -> [ProactiveSuggestion] {
+        // Suggestions are commitment-driven ("you promised X by Friday").
+        // With no open commitments there is nothing worth suggesting — and
+        // running the model anyway made this a per-call tax that almost
+        // always returned an empty list.
         let commitments = (try? store.openCommitments()) ?? []
-        let digests = (try? store.recentDigests(limit: 5)) ?? []
-        guard !commitments.isEmpty || !digests.isEmpty else { return [] }
+        guard !commitments.isEmpty else { return [] }
 
         let briefing = store.memoryBriefing(maxChars: 2000)
         let df = DateFormatter()

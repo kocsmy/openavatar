@@ -51,6 +51,31 @@ final class LLMContractTests: XCTestCase {
         XCTAssertEqual(response.usage.outputTokens, 20)
     }
 
+    func testAnthropicCachePrefixMarksTheSystemBlock() {
+        // High-frequency callers (live detection) opt into prompt caching:
+        // system becomes a block array with cache_control on the last block,
+        // which caches the whole tools+system prefix.
+        var cached = request
+        cached.cachePrefix = true
+        let body = AnthropicProvider.encode(cached)
+        XCTAssertEqual(body["system"]?[0]?["text"]?.stringValue, "You are a test.")
+        XCTAssertEqual(body["system"]?[0]?["cache_control"]?["type"]?.stringValue, "ephemeral")
+        // Without the flag the plain-string form stays byte-identical.
+        XCTAssertEqual(AnthropicProvider.encode(request)["system"]?.stringValue, "You are a test.")
+    }
+
+    func testAnthropicCacheUsageDecoding() throws {
+        let json = try JSONValue.parse("""
+        {"model":"test-model","content":[{"type":"text","text":"ok"}],
+         "usage":{"input_tokens":100,"output_tokens":5,
+                  "cache_read_input_tokens":1400,"cache_creation_input_tokens":0}}
+        """)
+        let usage = try AnthropicProvider.decode(json).usage
+        XCTAssertEqual(usage.inputTokens, 100)
+        XCTAssertEqual(usage.cacheReadTokens, 1400)
+        XCTAssertEqual(usage.cacheWriteTokens, 0)
+    }
+
     // MARK: OpenAI
 
     func testOpenAIRequestEncoding() {

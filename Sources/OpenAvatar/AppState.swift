@@ -113,8 +113,6 @@ final class AppState: ObservableObject {
     private(set) lazy var trust = TrustPolicyEngine(store: store)
     private(set) lazy var consolidator = MemoryConsolidator(router: router, store: store)
     private(set) lazy var proactive = ProactiveEngine(router: router, store: store)
-    private(set) lazy var followUpExtractor = FollowUpExtractor(router: router, store: store)
-    private(set) lazy var nameGuesser = SpeakerNameGuesser(router: router, store: store)
     private(set) lazy var sanitizer = ReviewSanitizer(router: router)
 
     private(set) lazy var diarizer = SpeakerDiarizer()
@@ -413,40 +411,12 @@ final class AppState: ObservableObject {
                 let summary = digestItems.map(\.summary).joined(separator: "; ")
                 try? store.endCall(callID, summary: summary.isEmpty ? nil : summary)
 
-                // Capture time-referenced follow-ups to confirm on the
-                // meeting page.
-                if settings.followUpsEnabled {
-                    if let found = try? await followUpExtractor.extract(
-                        callID: callID, callStart: callStart ?? Date()) {
-                        for f in found { try? store.insertFollowUp(f) }
-                        if currentCallID == callID {
-                            pendingFollowUps = found
-                        }
-                    }
-                }
-
                 // Persist the evolved voice centroids so the next call's
                 // enrollment recognizes everyone faster. (In-call merging is
                 // the backend's job now — its clustering keeps one id per
                 // voice, so there are no stray speakers to fold.)
                 if settings.diarizationEnabled {
                     await diarizer.endCall()
-                }
-
-                // Auto-name still-unnamed voices from transcript evidence
-                // ("this is Alexa", "thanks, Vasilis"). Manual names always win;
-                // best-effort and fully editable afterwards.
-                if settings.diarizationEnabled {
-                    if let applied = try? await nameGuesser.guessAndApply(callID: callID),
-                       !applied.isEmpty {
-                        for guess in applied {
-                            let sid = guess.profileID.uuidString
-                            for i in liveSegments.indices where liveSegments[i].speakerID == sid {
-                                liveSegments[i].speaker = guess.name
-                            }
-                        }
-                        await diarizer.reset()
-                    }
                 }
             }
 #if canImport(AppKit)
@@ -455,15 +425,37 @@ final class AppState: ObservableObject {
             // detected items are one glance away. No separate review window.
             WindowManager.shared.showCallWindow()
 #endif
-            // Compounding memory: digest the call, update facts, then see if
-            // anything warrants a proactive nudge.
+            // One post-call LLM pass does it all — digest + notes, memory
+            // facts, follow-ups, and speaker names — instead of three
+            // separate calls that each re-sent the same transcript.
             if let callID {
                 isConsolidating = true
                 defer { isConsolidating = false }
                 do {
-                    let outcome = try await consolidator.consolidate(callID: callID)
+                    let outcome = try await consolidator.consolidate(
+                        callID: callID, callStart: callStart ?? Date(),
+                        extractFollowUps: settings.followUpsEnabled,
+                        guessSpeakerNames: settings.diarizationEnabled)
                     if !outcome.notes.isEmpty, currentCallID == callID {
                         reviewCallNotes = outcome.notes
+                    }
+                    for f in outcome.followUps { try? store.insertFollowUp(f) }
+                    if currentCallID == callID, !outcome.followUps.isEmpty {
+                        pendingFollowUps = outcome.followUps
+                    }
+                    // Auto-detected speaker names (already persisted onto the
+                    // profiles): mirror into the live transcript view only
+                    // while this call still owns it.
+                    if !outcome.appliedGuesses.isEmpty {
+                        if currentCallID == callID {
+                            for guess in outcome.appliedGuesses {
+                                let sid = guess.profileID.uuidString
+                                for i in liveSegments.indices where liveSegments[i].speakerID == sid {
+                                    liveSegments[i].speaker = guess.name
+                                }
+                            }
+                        }
+                        await diarizer.reset()
                     }
                     proactiveSuggestions = (try? await proactive.suggestions()) ?? proactiveSuggestions
                 } catch {

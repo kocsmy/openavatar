@@ -57,11 +57,22 @@ struct LLMRequest: Sendable {
     /// the temperature parameter with HTTP 400 ("`temperature` is deprecated
     /// for this model"), so adapters must OMIT it unless explicitly set.
     var temperature: Double?
+    /// Ask the provider to cache the static prefix (tools + system prompt)
+    /// across requests. Set on high-frequency calls whose system prompt is
+    /// stable (live detection runs every ~30s with an identical prefix).
+    /// Anthropic needs an explicit cache_control marker; OpenAI and Gemini
+    /// cache long stable prefixes automatically, so they ignore the flag.
+    var cachePrefix: Bool = false
 }
 
 struct Usage: Codable, Sendable {
     var inputTokens: Int = 0
     var outputTokens: Int = 0
+    /// Prompt-cache accounting (Anthropic): cached reads bill at ~10% of the
+    /// input price, cache writes at ~125%. Zero on providers without explicit
+    /// cache reporting.
+    var cacheReadTokens: Int = 0
+    var cacheWriteTokens: Int = 0
 }
 
 struct LLMResponse: Sendable {

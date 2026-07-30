@@ -91,6 +91,39 @@ final class MemoryTests: XCTestCase {
         XCTAssertEqual(call.notes, "## June ARR\n- Self-serve at $612k\n- Churn 3.2%")
     }
 
+    func testMergedConsolidationParsesFollowUpsAndSpeakerNames() throws {
+        // The single post-call request carries follow-ups and speaker guesses
+        // alongside memory — one transcript send instead of three.
+        let callStart = Date()
+        let dueStr = ISO8601DateFormatter().string(
+            from: callStart.addingTimeInterval(86_400))
+        let callID = UUID()
+        let arguments = try JSONValue.parse("""
+        {"digest": "Planned the launch.",
+         "facts": [],
+         "followups": [
+            {"title": "Check the JTM script IDs", "due": "\(dueStr)",
+             "quote": "tomorrow we check the JTM script IDs"}
+         ],
+         "speaker_names": [
+            {"speaker": "Speaker 3", "name": "Vasilis", "confidence": 0.9},
+            {"speaker": "Speaker 5", "name": "unknown", "confidence": 0.9}
+         ]}
+        """)
+
+        let followUps = FollowUpExtractor.parse(arguments, callID: callID, callStart: callStart)
+        XCTAssertEqual(followUps.map(\.title), ["Check the JTM script IDs"])
+
+        let guesses = MemoryConsolidator.speakerGuesses(from: arguments)
+        XCTAssertEqual(guesses, [.init(label: "Speaker 3", name: "Vasilis")])
+    }
+
+    func testConsolidatorFactListIsCapped() throws {
+        // Memory growth must not inflate every consolidation prompt.
+        XCTAssertLessThanOrEqual(MemoryConsolidator.maxFactsInPrompt, 150)
+        XCTAssertLessThanOrEqual(MemoryConsolidator.maxFactPromptChars, 9_000)
+    }
+
     func testFactMatchByIDPrefix() {
         let fact = MemoryFact(category: .person, content: "Anna runs design", salience: 2)
         XCTAssertNotNil(MemoryConsolidator.match(String(fact.id.uuidString.prefix(8)), in: [fact]))

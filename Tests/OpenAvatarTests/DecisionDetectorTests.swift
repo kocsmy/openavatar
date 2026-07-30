@@ -57,4 +57,33 @@ final class DecisionDetectorTests: XCTestCase {
         """)
         XCTAssertTrue(DecisionDetector.parseDecisions(args, callID: UUID(), window: []).isEmpty)
     }
+
+    // MARK: Detection cadence (cost control)
+
+    func testFullBatchTriggersAPass() {
+        XCTAssertTrue(DecisionDetector.shouldRunDetection(
+            pendingSegments: DecisionDetector.segmentBatchSize, pendingChars: 10, gapSeconds: 0))
+    }
+
+    func testSilenceGapNeedsRealNewText() {
+        // A lone "mm-hmm" after every pause used to buy a full LLM round trip.
+        XCTAssertFalse(DecisionDetector.shouldRunDetection(
+            pendingSegments: 1, pendingChars: 7, gapSeconds: 20))
+        XCTAssertTrue(DecisionDetector.shouldRunDetection(
+            pendingSegments: 2, pendingChars: 180, gapSeconds: 20))
+    }
+
+    func testNoGapNoBatchMeansNoPass() {
+        XCTAssertFalse(DecisionDetector.shouldRunDetection(
+            pendingSegments: 3, pendingChars: 400, gapSeconds: 2))
+    }
+
+    func testBriefingLivesInTheCacheableSystemPrompt() {
+        // The briefing must be part of the stable prefix (system prompt), not
+        // the per-pass user message, or nothing caches.
+        let prompt = DecisionDetector.systemPrompt(wakePhrase: "Ava",
+                                                   briefing: "Project: OpenAvatar launch")
+        XCTAssertTrue(prompt.contains("Project: OpenAvatar launch"))
+        XCTAssertTrue(prompt.contains("Ava"))
+    }
 }
