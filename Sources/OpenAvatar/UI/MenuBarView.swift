@@ -10,8 +10,6 @@ struct MenuBarView: View {
     @EnvironmentObject var app: AppState
     @EnvironmentObject var settings: SettingsStore
 
-    @Environment(\.openSettings) private var openSettings
-
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             header
@@ -350,21 +348,13 @@ struct MenuBarView: View {
         }
     }
 
-    /// Opens Settings and forces it to the front. As a menu-bar (accessory) app
-    /// we aren't "active", so an already-open Settings window would otherwise
-    /// stay buried behind other apps' windows — activate first, then raise it.
+    /// Opens the main window and forces it to the front. Ours is a plain
+    /// NSWindow (resizable, remembered frame) — the SwiftUI Settings scene it
+    /// replaced could never be resized.
     private func openSettingsAndFocus() {
-        NSApp.activate(ignoringOtherApps: true)
-        openSettings()
-        DispatchQueue.main.async {
-            NSApp.activate(ignoringOtherApps: true)
-            let settingsWindow = NSApp.windows.first {
-                $0.identifier?.rawValue == "com_apple_SwiftUI_Settings_window"
-                    || $0.title == "OpenAvatar Settings"
-            }
-            settingsWindow?.makeKeyAndOrderFront(nil)
-            settingsWindow?.orderFrontRegardless()
-        }
+#if canImport(AppKit)
+        WindowManager.shared.showMain()
+#endif
     }
 
     @ViewBuilder private func section<Content: View>(
