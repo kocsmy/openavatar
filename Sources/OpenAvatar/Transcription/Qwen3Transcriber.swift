@@ -51,11 +51,27 @@ actor Qwen3Transcriber: Transcriber {
             throw AppError.notConfigured(
                 "Qwen3-ASR failed: \(response["message"] as? String ?? "unknown error")")
         }
-        guard let text = (response["text"] as? String)?
-            .trimmingCharacters(in: .whitespacesAndNewlines),
-            !text.isEmpty, !WhisperLocalTranscriber.isNoise(text) else { return [] }
+        let text = Self.cleanOutput(response["text"] as? String ?? "")
+        guard !text.isEmpty, !WhisperLocalTranscriber.isNoise(text) else { return [] }
         return [TranscriptSegment(text: text, t0: chunk.t0, t1: chunk.t1,
                                   source: chunk.source, confidence: 0.9)]
+    }
+
+    /// Qwen3-ASR wraps every result in a language-ID envelope —
+    /// "language English<asr_text>the actual words…", and "language
+    /// None<asr_text>" with nothing after it means no speech. The bridge
+    /// returns that envelope verbatim; strip it before the transcript sees it
+    /// (regression: raw "language English<asr_text>" prefixes in the UI).
+    nonisolated static func cleanOutput(_ raw: String) -> String {
+        var text = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+        if let marker = text.range(of: "<asr_text>"),
+           text.lowercased().hasPrefix("language") || marker.lowerBound == text.startIndex {
+            text = String(text[marker.upperBound...])
+        }
+        // Stray tags from any other envelope shape.
+        text = text.replacingOccurrences(of: "<asr_text>", with: " ")
+            .replacingOccurrences(of: "</asr_text>", with: " ")
+        return text.trimmingCharacters(in: .whitespacesAndNewlines)
     }
 
     /// Shut the bridge down (frees ~4 GB of memory). Restarts on next use.
