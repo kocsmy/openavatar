@@ -64,6 +64,39 @@ final class LLMContractTests: XCTestCase {
         XCTAssertEqual(AnthropicProvider.encode(request)["system"]?.stringValue, "You are a test.")
     }
 
+    func testAnthropicConversationCacheMarksTheLastMessage() {
+        // Multi-turn loops (the code-change diff loop): the breakpoint rides
+        // on the last message so each iteration re-reads prior turns from
+        // cache. A plain-string message is promoted to block form.
+        var req = request
+        req.cacheConversation = true
+        let body = AnthropicProvider.encode(req)
+        let lastContent = body["messages"]?[0]?["content"]
+        XCTAssertEqual(lastContent?[0]?["text"]?.stringValue, "Hello")
+        XCTAssertEqual(lastContent?[0]?["cache_control"]?["type"]?.stringValue, "ephemeral")
+    }
+
+    func testAnthropicConversationCacheMarksToolResultBlocks() {
+        var req = request
+        req.cacheConversation = true
+        req.messages = [
+            ChatMessage(role: .user, content: "Change the button color"),
+            ChatMessage(role: .assistant, content: "",
+                        toolCalls: [ToolCall(id: "tu_1", name: "read_file",
+                                             arguments: .object(["path": "app.css"]))]),
+            ChatMessage(role: .tool, content: ".button { color: red }",
+                        toolCallID: "tu_1", toolName: "read_file")
+        ]
+        let body = AnthropicProvider.encode(req)
+        let messages = body["messages"]?.arrayValue ?? []
+        XCTAssertEqual(messages.count, 3)
+        // Only the LAST message carries the marker, on its last block.
+        XCTAssertNil(messages[0]["content"]?[0]?["cache_control"])
+        let lastBlock = messages[2]["content"]?[0]
+        XCTAssertEqual(lastBlock?["type"]?.stringValue, "tool_result")
+        XCTAssertEqual(lastBlock?["cache_control"]?["type"]?.stringValue, "ephemeral")
+    }
+
     func testAnthropicCacheUsageDecoding() throws {
         let json = try JSONValue.parse("""
         {"model":"test-model","content":[{"type":"text","text":"ok"}],
