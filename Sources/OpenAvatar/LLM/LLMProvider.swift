@@ -63,6 +63,11 @@ struct LLMRequest: Sendable {
     /// Anthropic needs an explicit cache_control marker; OpenAI and Gemini
     /// cache long stable prefixes automatically, so they ignore the flag.
     var cachePrefix: Bool = false
+    /// Cache the conversation as it grows (multi-turn agentic loops): a
+    /// breakpoint on the last message means each iteration re-reads the
+    /// previous turns from cache instead of re-billing them at full price.
+    /// Anthropic-only, same as cachePrefix.
+    var cacheConversation: Bool = false
 }
 
 struct Usage: Codable, Sendable {

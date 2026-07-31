@@ -14,10 +14,17 @@ struct AnthropicProvider: LLMProvider {
     // MARK: Request mapping
 
     static func encode(_ req: LLMRequest) -> JSONValue {
+        var messages = req.messages.compactMap(encodeMessage)
+        if req.cacheConversation, !messages.isEmpty {
+            // Multi-turn loops: a breakpoint on the last message caches the
+            // whole conversation so far — the next iteration re-reads it at
+            // ~10% instead of re-billing every prior turn at full price.
+            messages[messages.count - 1] = markingLastBlockCached(messages[messages.count - 1])
+        }
         var body: [String: JSONValue] = [
             "model": .string(req.model),
             "max_tokens": .number(Double(req.maxTokens)),
-            "messages": .array(req.messages.compactMap(encodeMessage))
+            "messages": .array(messages)
         ]
         // Only send temperature when explicitly requested — newer Claude
         // models return 400 if it is present at all.
@@ -52,6 +59,24 @@ struct AnthropicProvider: LLMProvider {
             }
         }
         return .object(body)
+    }
+
+    /// cache_control lives on content BLOCKS, so a plain-string message is
+    /// promoted to block form and the marker goes on the last block.
+    static func markingLastBlockCached(_ message: JSONValue) -> JSONValue {
+        guard var object = message.objectValue else { return message }
+        let cache: JSONValue = .object(["type": "ephemeral"])
+        if let text = object["content"]?.stringValue {
+            object["content"] = .array([.object([
+                "type": "text", "text": .string(text), "cache_control": cache
+            ])])
+        } else if var blocks = object["content"]?.arrayValue,
+                  var lastBlock = blocks.last?.objectValue {
+            lastBlock["cache_control"] = cache
+            blocks[blocks.count - 1] = .object(lastBlock)
+            object["content"] = .array(blocks)
+        }
+        return .object(object)
     }
 
     private static func encodeMessage(_ message: ChatMessage) -> JSONValue? {
