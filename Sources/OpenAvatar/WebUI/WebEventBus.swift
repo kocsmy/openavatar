@@ -69,7 +69,8 @@ final class WebEventBus {
         guard !views.isEmpty else { return }
         var object = payload
         object["id"] = .string(id)
-        guard let json = String(data: JSONValue.object(object).encodedData(), encoding: .utf8) else { return }
+        guard let data = try? JSONValue.object(object).encodedData(),
+              let json = String(data: data, encoding: .utf8) else { return }
         let js = "window.__avatarStream && window.__avatarStream(\(json))"
         for box in views {
             box.view?.evaluateJavaScript(js)

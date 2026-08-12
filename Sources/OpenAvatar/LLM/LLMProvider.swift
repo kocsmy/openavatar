@@ -174,7 +174,7 @@ struct HTTPClient: Sendable {
         request.httpMethod = "POST"
         for (k, v) in headers { request.setValue(v, forHTTPHeaderField: k) }
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
-        request.httpBody = body.encodedData()
+        request.httpBody = try body.encodedData()
 
         let (bytes, response) = try await URLSession.shared.bytes(for: request)
         guard let http = response as? HTTPURLResponse else {
