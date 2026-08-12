@@ -26,7 +26,13 @@ enum SpeakerNameGuesser {
 
     /// Keeps only confident, plausible name guesses. Pure so tests can pin the
     /// filtering exactly.
-    static func parse(_ arguments: JSONValue) -> [Guess] {
+    ///
+    /// `roster` is the meeting's invitee list. When we have one, a guess must
+    /// name somebody on it — that turns naming from "invent a name from the
+    /// transcript" into "match a voice to a known person", which is the change
+    /// that stops a name merely *mentioned* in conversation ("happy birthday
+    /// to your son, Conrad") from becoming a speaker who was never present.
+    static func parse(_ arguments: JSONValue, roster: [String] = []) -> [Guess] {
         var seen: Set<String> = []
         var out: [Guess] = []
         for item in arguments["names"]?.arrayValue ?? [] {
@@ -34,7 +40,8 @@ enum SpeakerNameGuesser {
                   let raw = item["name"]?.stringValue else { continue }
             let confidence = item["confidence"]?.numberValue ?? 0
             guard confidence >= minConfidence else { continue }
-            let name = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+            let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard let name = canonical(trimmed, in: roster) else { continue }
             // Plausibility: short human-name shape, not a sentence or a role.
             guard !name.isEmpty, name.count <= 40,
                   name.rangeOfCharacter(from: .newlines) == nil,
@@ -46,5 +53,20 @@ enum SpeakerNameGuesser {
             out.append(Guess(label: label, name: name))
         }
         return out
+    }
+
+    /// The roster's own spelling of a guessed name, or the guess unchanged
+    /// when there is no roster to check against. Nil rejects the guess.
+    static func canonical(_ name: String, in roster: [String]) -> String? {
+        guard !roster.isEmpty else { return name }
+        let needle = name.lowercased()
+        if let exact = roster.first(where: { $0.lowercased() == needle }) { return exact }
+        // People are called by their first name on a call and invited by
+        // their full one, so "Vasilis" should find "Vasilis Andreou" — but
+        // only when exactly one invitee can be meant.
+        let partial = roster.filter {
+            $0.lowercased().split(separator: " ").contains(Substring(needle))
+        }
+        return partial.count == 1 ? partial[0] : nil
     }
 }

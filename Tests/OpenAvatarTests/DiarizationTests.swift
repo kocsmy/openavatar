@@ -79,9 +79,57 @@ final class DiarizationTests: XCTestCase {
         XCTAssertEqual(Set([first?.label, second?.label]), ["Speaker 1", "Speaker 2"])
     }
 
-    /// The same backend voice across many chunks stays ONE profile — the
-    /// over-splitting complaint (10 speakers on a 1:1 call) can't recur when
-    /// identity is the backend's job.
+    /// Unnamed fingerprints from earlier calls are NOT enrolled. Seeding the
+    /// backend with every voice it had ever heard gave dozens of weak
+    /// centroids the chance to claim a stranger's speech — that is how people
+    /// who were never on a call ended up in its transcript. Only voices the
+    /// user (or the roster) actually named are worth matching; the rest are
+    /// regrouped from scratch by the end-of-call pass.
+    func testOnlyNamedProfilesAreEnrolled() async throws {
+        let store = try ContextStore(inMemory: true)
+        let now = Date()
+        let named = SpeakerProfile(id: UUID(), name: "Alice", ordinal: 1,
+                                   embedding: [Float](repeating: 0.2, count: 256),
+                                   sampleCount: 12, createdAt: now, updatedAt: now)
+        let stray = SpeakerProfile(id: UUID(), name: nil, ordinal: 2,
+                                   embedding: [Float](repeating: 0.4, count: 256),
+                                   sampleCount: 1, createdAt: now, updatedAt: now)
+        try store.insertSpeakerProfile(named)
+        try store.insertSpeakerProfile(stray)
+
+        let backend = FakeDiarizerBackend()
+        backend.script = [[]]
+        let diarizer = makeDiarizer(store: store, backend: backend)
+        await diarizer.beginCall()
+        await diarizer.ingest(chunk: chunk())
+
+        XCTAssertEqual(backend.enrolledIDs, [named.id.uuidString])
+    }
+
+    /// Live "Speaker N" numbering restarts each call. The stored ordinal is a
+    /// database detail — surfacing it made a four-person meeting read
+    /// "Speaker 31, Speaker 52, …".
+    func testSpeakerNumberingIsScopedToTheCall() async throws {
+        let store = try ContextStore(inMemory: true)
+        let now = Date()
+        for ordinal in 1...30 {
+            try store.insertSpeakerProfile(SpeakerProfile(
+                id: UUID(), name: nil, ordinal: ordinal,
+                embedding: [Float](repeating: 0.5, count: 256),
+                sampleCount: 1, createdAt: now, updatedAt: now))
+        }
+        let backend = FakeDiarizerBackend()
+        backend.script = [[turn("A", 0, 7), turn("B", 7, 15)]]
+        let diarizer = makeDiarizer(store: store, backend: backend)
+        await diarizer.beginCall()
+        await diarizer.ingest(chunk: chunk())
+
+        let first = await diarizer.label(for: segment(1, 6))
+        let second = await diarizer.label(for: segment(8, 14))
+        XCTAssertEqual([first?.label, second?.label], ["Speaker 1", "Speaker 2"])
+    }
+
+    /// The same backend voice across many chunks stays ONE profile.
     func testSameVoiceAcrossChunksStaysOneSpeaker() async throws {
         let store = try ContextStore(inMemory: true)
         let backend = FakeDiarizerBackend()

@@ -98,6 +98,8 @@ actor SpeakerDiarizer {
     private var timeline = SpeakerTimeline()
     private var labeledCounts: [UUID: Int] = [:]
     private var enrolled = false
+    /// "Speaker N" numbering scoped to this call, in first-heard order.
+    private var callOrdinals: [UUID: Int] = [:]
 
     init(store: ContextStore = .shared,
          backendFactory: @escaping @Sendable () -> DiarizerBackend = { FluidDiarizerBackend() }) {
@@ -114,6 +116,7 @@ actor SpeakerDiarizer {
         backendToProfile = [:]
         timeline = SpeakerTimeline()
         labeledCounts = [:]
+        callOrdinals = [:]
         enrolled = false
         Task { await prepareBackend() }
     }
@@ -128,12 +131,19 @@ actor SpeakerDiarizer {
         }
     }
 
-    /// Seed the backend with every same-space (neural, 256-dim) fingerprint.
-    /// Legacy spectral profiles can't be enrolled — their names still attach
-    /// via manual rename or the name guesser.
+    /// Seed the backend with every NAMED same-space (neural, 256-dim)
+    /// fingerprint. Legacy spectral profiles can't be enrolled — their names
+    /// still attach via manual rename or the name guesser.
+    ///
+    /// Unnamed voices are deliberately left out. Enrolling every fingerprint
+    /// the app had ever heard meant dozens of competing centroids, many built
+    /// from a second or two of speech, each able to claim a stranger's voice —
+    /// that is how people who were never on a call ended up in its transcript.
+    /// An unnamed match also buys nothing: the end-of-call pass regroups the
+    /// call from scratch anyway.
     private func enrollStoredProfiles() {
         guard !enrolled, backend.isReady else { return }
-        let known = profiles.filter { $0.embedding.count >= 100 }
+        let known = profiles.filter { $0.embedding.count >= 100 && $0.isNamed }
         backend.enroll(known.map { ($0.id.uuidString, $0.name, $0.embedding) })
         for p in known { backendToProfile[p.id.uuidString] = p.id }
         enrolled = true
@@ -185,7 +195,18 @@ actor SpeakerDiarizer {
         guard let speakerID = timeline.speaker(overlapping: segment.t0, segment.t1),
               let profile = profiles.first(where: { $0.id == speakerID }) else { return nil }
         labeledCounts[speakerID, default: 0] += 1
-        return DiarizedSpeaker(id: profile.id, label: profile.displayLabel)
+        return DiarizedSpeaker(id: profile.id, label: callLabel(for: profile))
+    }
+
+    /// A named voice keeps its name; an unnamed one is numbered by when it
+    /// first spoke on THIS call. The stored ordinal is a database detail —
+    /// showing it made a four-person meeting read "Speaker 31, Speaker 52…".
+    private func callLabel(for profile: SpeakerProfile) -> String {
+        if profile.isNamed { return profile.displayLabel }
+        if let existing = callOrdinals[profile.id] { return "Speaker \(existing)" }
+        let next = callOrdinals.count + 1
+        callOrdinals[profile.id] = next
+        return "Speaker \(next)"
     }
 
     /// End of call: persist the backend's evolved voice centroids and the

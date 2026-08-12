@@ -43,6 +43,40 @@ final class SpeakerNameGuesserTests: XCTestCase {
                        [.init(label: "Speaker 4", name: "Vasilis")])
     }
 
+    /// The regression that put strangers in the transcript: a name the call
+    /// merely TALKED ABOUT became a speaker. With an invitee list, naming is
+    /// a matching problem and anyone off the list is refused.
+    func testRosterRejectsNamesOnlyMentionedInConversation() throws {
+        let args = try JSONValue.parse("""
+        {"names": [
+          {"speaker": "Speaker 1", "name": "Vasilis", "confidence": 0.9},
+          {"speaker": "Speaker 2", "name": "Conrad", "confidence": 0.9},
+          {"speaker": "Speaker 3", "name": "Tiago", "confidence": 0.95}
+        ]}
+        """)
+        let guesses = SpeakerNameGuesser.parse(args, roster: ["Vasilis Andreou", "Marta Kis"])
+        XCTAssertEqual(guesses, [.init(label: "Speaker 1", name: "Vasilis Andreou")],
+                       "a first name resolves to the invitee; the rest are refused")
+    }
+
+    func testRosterlessCallsKeepTheOldBehaviour() throws {
+        // No calendar event → nothing to match against, so transcript
+        // evidence is all we have and the filter stays as it was.
+        let args = try JSONValue.parse("""
+        {"names": [{"speaker": "Speaker 1", "name": "Vasilis", "confidence": 0.9}]}
+        """)
+        XCTAssertEqual(SpeakerNameGuesser.parse(args, roster: []),
+                       [.init(label: "Speaker 1", name: "Vasilis")])
+    }
+
+    func testAmbiguousFirstNameIsRefusedRatherThanGuessed() {
+        XCTAssertNil(SpeakerNameGuesser.canonical("Alex", in: ["Alex Meyer", "Alex Ruiz"]))
+        XCTAssertEqual(SpeakerNameGuesser.canonical("alex", in: ["Alex Meyer", "Bo Tran"]),
+                       "Alex Meyer")
+        XCTAssertEqual(SpeakerNameGuesser.canonical("Bo Tran", in: ["Alex Meyer", "Bo Tran"]),
+                       "Bo Tran")
+    }
+
     func testPerCallSpeakerScoping() throws {
         // speakerProfiles(callID:) returns only the voices heard on that call,
         // in first-heard order — the basis of the per-call roster UI.
