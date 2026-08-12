@@ -40,8 +40,8 @@ enum SpeakerNameGuesser {
                   let raw = item["name"]?.stringValue else { continue }
             let confidence = item["confidence"]?.numberValue ?? 0
             guard confidence >= minConfidence else { continue }
-            let name = raw.trimmingCharacters(in: .whitespacesAndNewlines)
-            guard let name = canonical(name, in: roster) else { continue }
+            let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard let name = canonical(trimmed, in: roster) else { continue }
             // Plausibility: short human-name shape, not a sentence or a role.
             guard !name.isEmpty, name.count <= 40,
                   name.rangeOfCharacter(from: .newlines) == nil,

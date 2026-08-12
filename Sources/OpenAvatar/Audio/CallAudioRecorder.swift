@@ -42,7 +42,7 @@ actor CallAudioRecorder {
         // A header with a zero-length data chunk; the sizes are patched in
         // finish(), once we know how long the call actually ran.
         guard FileManager.default.createFile(
-                path: target.path, contents: WAVEncoder.wavData(fromPCM: Data())),
+                atPath: target.path, contents: WAVEncoder.wavData(fromPCM: Data())),
               let opened = try? FileHandle(forWritingTo: target) else {
             NSLog("Call audio buffer unavailable — speakers will keep their live labels")
             return
@@ -92,6 +92,18 @@ actor CallAudioRecorder {
         if let url { try? FileManager.default.removeItem(at: url) }
         url = nil
         highWaterMark = 0
+    }
+
+    /// Delete recordings left behind by a crash or a force-quit — the normal
+    /// path removes them the moment the speaker pass is done, so anything
+    /// still here belongs to a call that will never finish.
+    static func cleanUpOrphans() {
+        let temp = FileManager.default.temporaryDirectory
+        let files = (try? FileManager.default.contentsOfDirectory(
+            at: temp, includingPropertiesForKeys: nil)) ?? []
+        for file in files where file.lastPathComponent.hasPrefix("openavatar-call-") {
+            try? FileManager.default.removeItem(at: file)
+        }
     }
 
     /// The 44-byte prefix WAVEncoder produces for a payload of `dataSize`.

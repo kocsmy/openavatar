@@ -131,6 +131,9 @@ final class AppState: ObservableObject {
     private let callDetector = CallDetector()
 
     private init() {
+        // A call that ended in a crash can't clean up after itself, and its
+        // buffered audio is worth ~2 MB a minute.
+        CallAudioRecorder.cleanUpOrphans()
         // Every 5s, check who holds the microphone. While idle: surface the
         // suggestion banner, and (when enabled) auto-start capture on a strong
         // call signal — Granola-style, joining a Zoom call just starts the
