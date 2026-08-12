@@ -86,6 +86,7 @@ export const callMocks: MockHandlers = {
   "call.stop": async () => {
     mode = "ended";
     endedSummary = {
+      callID: "call-acme",
       title: "Sync with Acme",
       startedAt: new Date(Date.now() - 42_000).toISOString(),
       endedAt: new Date().toISOString(),

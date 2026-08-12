@@ -9,12 +9,11 @@ import AppKit
 /// bridge. The TypeScript half of this contract lives in
 /// web/src/lib/types/call.ts.
 ///
-/// Scope note: once a call ends, native (CallNotesWindowView) hands the whole
-/// window over to MeetingDetailView (summary/actions/transcript tabs) — that
-/// view belongs to the Meetings surface, not this one. `call.state`'s "ended"
-/// mode instead returns just enough (title, notes preview, consolidation
-/// status) for a lightweight "call ended" card that points at Meetings for
-/// the full review, so this bridge never reimplements that page.
+/// Once a call ends, this window hands over to the meeting detail — the same
+/// takeover CallNotesWindowView did, since that review is where the detected
+/// actions get approved. The page renders the Meetings surface's own detail
+/// component against `ended.callID`, so the review exists in exactly one
+/// place and this bridge never reimplements it.
 @MainActor
 final class CallBridge {
     private let app = AppState.shared
@@ -102,6 +101,7 @@ final class CallBridge {
             notes = live
         }
         return .object([
+            "callID": .string(call.id.uuidString),
             "title": .string(call.displayTitle),
             "startedAt": .string(iso.string(from: call.startedAt)),
             "endedAt": call.endedAt.map { .string(iso.string(from: $0)) } ?? .null,

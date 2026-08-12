@@ -128,6 +128,13 @@ export function MeetingsPage() {
     );
   }, [meetings, query]);
 
+  // Open on the newest meeting, the way a mail client does. The native list
+  // pushed to a detail view and had nothing to show until you picked one;
+  // side by side, an empty half-window is just wasted space.
+  React.useEffect(() => {
+    if (selectedID === null && meetings.length > 0) setSelectedID(meetings[0].id);
+  }, [meetings, selectedID]);
+
   const groups = React.useMemo(() => {
     const byDay = new Map<string, { day: Date; items: MeetingSummary[] }>();
     for (const m of filtered) {

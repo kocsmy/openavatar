@@ -18,6 +18,8 @@ export interface CallPreviewEvent {
 }
 
 export interface CallEndedSummary {
+  /** The detail pane loads the full review from this. */
+  callID: string;
   title: string;
   startedAt: string;
   endedAt: string | null;
