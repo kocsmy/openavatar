@@ -20,6 +20,7 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
+import { AskBar, ChatThread, historyOf, type ChatItem } from "@/components/chat";
 import { cn } from "@/lib/utils";
 import {
   Bell,
@@ -35,7 +36,7 @@ import {
 } from "lucide-react";
 import { digestBullets, displayTitle, formatDateTime, meetingDuration, segmentColorClass } from "./Meetings";
 
-type Pane = "summary" | "actions" | "transcript";
+type Pane = "summary" | "notes" | "actions" | "transcript";
 
 const DISMISS_REASONS: { value: DismissReason; label: string }[] = [
   { value: "wrong_transcription", label: "Wrong transcription" },
@@ -466,6 +467,52 @@ function FollowUpRow({ followUp, callID, onChanged }: { followUp: MeetingFollowU
   );
 }
 
+/**
+ * The user's own notes. Editable here and not only in the call window: the
+ * meeting you wrote notes for is exactly the one you want to add to once it's
+ * over. Autosaves on a short debounce and on blur, so there's no Save button
+ * to forget.
+ */
+function MyNotes({ callID, notes }: { callID: string; notes: string }) {
+  const [value, setValue] = React.useState(notes);
+  const [dirty, setDirty] = React.useState(false);
+
+  const save = React.useCallback(
+    async (text: string) => {
+      await bridge("meetings.saveUserNotes", { callID, notes: text });
+      setDirty(false);
+    },
+    [callID],
+  );
+
+  React.useEffect(() => {
+    if (!dirty) return;
+    const t = window.setTimeout(() => void save(value), 700);
+    return () => window.clearTimeout(t);
+  }, [value, dirty, save]);
+
+  return (
+    <>
+      <div className="flex items-center justify-between">
+        <p className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground/70">My notes</p>
+        {dirty ? <span className="text-[11px] text-muted-foreground">Saving…</span> : null}
+      </div>
+      <textarea
+        value={value}
+        onChange={(e) => {
+          setValue(e.target.value);
+          setDirty(true);
+        }}
+        onBlur={() => {
+          if (dirty) void save(value);
+        }}
+        placeholder="Anything you jotted down — before, during or after the call."
+        className="min-h-80 w-full resize-none rounded-lg border border-border bg-card p-3 text-[13.5px] leading-relaxed outline-none focus:border-primary/50"
+      />
+    </>
+  );
+}
+
 // MARK: Transcript row — memoized and paint-deferred off-screen so a long
 // call scrolls smoothly without a virtualization dependency.
 
@@ -509,6 +556,26 @@ export function MeetingDetailPane({ callID, onDeleted }: { callID: string; onDel
   const [message, setMessage] = React.useState<string | null>(null);
   const [confirmingDelete, setConfirmingDelete] = React.useState(false);
   const [deleting, setDeleting] = React.useState(false);
+  const [thread, setThread] = React.useState<ChatItem[]>([]);
+  const [asking, setAsking] = React.useState(false);
+
+  /** A follow-up question about this call, answered from its own transcript. */
+  async function askQuestion(question: string) {
+    const history = historyOf(thread);
+    setThread((t) => [...t, { role: "user", content: question }]);
+    setAsking(true);
+    try {
+      const res = await bridge("meetings.ask", { callID, question, history });
+      setThread((t) => [...t, { role: "assistant", content: res.answer }]);
+    } catch (e) {
+      setThread((t) => [
+        ...t,
+        { role: "assistant", content: e instanceof Error ? e.message : String(e), failed: true },
+      ]);
+    } finally {
+      setAsking(false);
+    }
+  }
 
   const load = React.useCallback(async () => {
     const d = await bridge("meetings.detail", { callID });
@@ -646,6 +713,7 @@ export function MeetingDetailPane({ callID, onDeleted }: { callID: string; onDel
           {(
             [
               ["summary", "Summary"],
+              ["notes", "My notes"],
               ["actions", "Actions"],
               ["transcript", "Transcript"],
             ] as [Pane, string][]
@@ -693,16 +761,12 @@ export function MeetingDetailPane({ callID, onDeleted }: { callID: string; onDel
               />
             )}
 
-            {call.userNotes ? (
-              <div className="rounded-lg bg-card p-3 shadow-sm">
-                <p className="mb-1.5 text-[11px] font-semibold uppercase tracking-wider text-muted-foreground/70">
-                  My notes
-                </p>
-                <p className="whitespace-pre-wrap text-[13.5px] leading-relaxed" data-selectable>
-                  {call.userNotes}
-                </p>
-              </div>
-            ) : null}
+          </div>
+        ) : null}
+
+        {pane === "notes" ? (
+          <div className="mx-auto flex max-w-2xl flex-col gap-2 px-6 py-6">
+            <MyNotes callID={callID} notes={call.userNotes ?? ""} />
           </div>
         ) : null}
 
@@ -756,6 +820,25 @@ export function MeetingDetailPane({ callID, onDeleted }: { callID: string; onDel
             </div>
           )
         ) : null}
+      </div>
+
+      {/* Asking sits outside the scrolling panes so it stays reachable from
+          the summary, the notes and halfway down a long transcript alike —
+          the question is usually about the call, not about the tab. */}
+      <div className="shrink-0 border-t border-border bg-background/80 px-6 py-3 backdrop-blur">
+        <div className="mx-auto flex max-w-2xl flex-col gap-3">
+          {thread.length > 0 || asking ? (
+            <div className="max-h-64 overflow-y-auto pr-1">
+              <ChatThread thread={thread} busy={asking} />
+            </div>
+          ) : null}
+          <AskBar
+            placeholder="Ask anything about this meeting"
+            busy={asking}
+            onSubmit={(q) => void askQuestion(q)}
+            onClear={thread.length > 0 ? () => setThread([]) : undefined}
+          />
+        </div>
       </div>
 
       <Dialog open={confirmingDelete} onOpenChange={setConfirmingDelete}>

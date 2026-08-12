@@ -306,4 +306,34 @@ export const meetingsMocks: MockHandlers = {
     const day = m.startedAt.slice(0, 10);
     return { message: `Exported to transcript-${day}.md` };
   },
+  "meetings.saveUserNotes": async (params) => {
+    const m = findMeeting(params.callID);
+    if (m) m.userNotes = String(params.notes ?? "");
+    emitLocal("meetings");
+    return {};
+  },
+  // The real answers come from the configured model; the mock just proves the
+  // round trip so the composer can be developed in a browser.
+  "meetings.ask": async (params) => {
+    await delay(700);
+    const m = findMeeting(params.callID);
+    return {
+      answer: m
+        ? `(mock answer) Nothing in “${m.title ?? "this call"}” addresses “${params.question}” directly.`
+        : "(mock answer) That meeting isn't in the library.",
+      callIDs: m ? [m.id] : [],
+    };
+  },
+  "meetings.search": async (params) => {
+    await delay(900);
+    const hits = meetings
+      .filter((m) => `${m.title ?? ""} ${m.summary ?? ""}`.toLowerCase().includes(String(params.query ?? "").toLowerCase()))
+      .slice(0, 3);
+    return {
+      answer: hits.length
+        ? `(mock answer) ${hits.length} meeting${hits.length > 1 ? "s" : ""} mention that.`
+        : "(mock answer) Nothing in the library covers that.",
+      callIDs: hits.map((m) => m.id),
+    };
+  },
 };
