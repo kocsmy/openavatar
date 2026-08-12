@@ -44,7 +44,8 @@ actor MemoryConsolidator {
     @discardableResult
     func consolidate(callID: UUID, callStart: Date = Date(),
                      extractFollowUps: Bool = false,
-                     guessSpeakerNames: Bool = false) async throws -> Outcome {
+                     guessSpeakerNames: Bool = false,
+                     attendees: [String] = []) async throws -> Outcome {
         let segments = try store.allSegments(callID: callID)
         guard !segments.isEmpty else {
             return Outcome(digest: "", factsAdded: 0, factsReinforced: 0, factsRetired: 0)
@@ -98,6 +99,17 @@ actor MemoryConsolidator {
              Unnamed speakers to identify from transcript evidence: \
             \(unnamedByLabel.keys.sorted().joined(separator: ", ")).
             """
+            // With a roster this stops being "read a name out of the
+            // transcript" and becomes "match a voice to one of these people",
+            // which is both easier and far harder to get wrong.
+            if !attendees.isEmpty {
+                instructions += """
+                 The meeting invitees are: \(attendees.joined(separator: ", ")). \
+                Every name you return MUST be one of them — a person merely \
+                talked ABOUT is not a speaker. If a voice matches nobody on \
+                that list, omit it.
+                """
+            }
         } else {
             instructions += " Leave speaker_names empty."
         }
@@ -128,8 +140,15 @@ actor MemoryConsolidator {
             outcome.followUps = FollowUpExtractor.parse(call.arguments, callID: callID,
                                                         callStart: callStart)
         }
-        for guess in Self.speakerGuesses(from: call.arguments) {
-            guard let profileID = unnamedByLabel[guess.label] else { continue }
+        // One person is one voice: a name already worn by another speaker on
+        // this call can't be handed to a second one. (Three chips reading
+        // "Vasilis" is how that failure looked.)
+        var taken = Set(((try? store.speakerProfiles(callID: callID)) ?? [])
+            .compactMap { $0.name?.lowercased() })
+        for guess in Self.speakerGuesses(from: call.arguments, roster: attendees) {
+            guard let profileID = unnamedByLabel[guess.label],
+                  !taken.contains(guess.name.lowercased()) else { continue }
+            taken.insert(guess.name.lowercased())
             try store.renameSpeaker(id: profileID, to: guess.name)
             outcome.appliedGuesses.append(.init(profileID: profileID, name: guess.name))
         }
@@ -185,8 +204,10 @@ actor MemoryConsolidator {
 
     /// Speaker guesses live under "speaker_names"; the shared filter
     /// (confidence, plausibility) expects them under "names".
-    static func speakerGuesses(from arguments: JSONValue) -> [SpeakerNameGuesser.Guess] {
-        SpeakerNameGuesser.parse(.object(["names": arguments["speaker_names"] ?? .array([])]))
+    static func speakerGuesses(from arguments: JSONValue,
+                               roster: [String] = []) -> [SpeakerNameGuesser.Guess] {
+        SpeakerNameGuesser.parse(.object(["names": arguments["speaker_names"] ?? .array([])]),
+                                 roster: roster)
     }
 
     // MARK: Prompt & tool
@@ -240,9 +261,12 @@ actor MemoryConsolidator {
         5. speaker_names — real names for the unnamed speakers you are asked to \
         identify, using only evidence IN the transcript: self-introductions \
         ("hi, this is Alexa"), direct address followed by that voice answering, \
-        or a host announcing who joined. One name per speaker AT MOST, honest \
-        confidence; OMIT a speaker rather than guess — a wrong name is worse \
-        than none. Never rename "You", never use roles as names.
+        or a host announcing who joined. A name that merely APPEARS in the \
+        conversation is not evidence — people discuss colleagues, customers \
+        and family who are not in the room, and naming a voice after one of \
+        them is the worst error you can make here. One name per speaker AT \
+        MOST, honest confidence; OMIT a speaker rather than guess — a wrong \
+        name is worse than none. Never rename "You", never use roles as names.
         """
 
     static let updateMemoryTool = ToolSpec(

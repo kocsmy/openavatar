@@ -204,6 +204,67 @@ final class ContextStore: @unchecked Sendable {
                 }
             }
         }
+        // v11 — sweep the voice fingerprints that streaming diarization piled
+        // up. Diarizing 15-second windows in isolation minted a permanent
+        // profile every time a short utterance failed to match, so a handful
+        // of real people became dozens of "Speaker N" rows; those rows were
+        // then enrolled into later calls, where their weak centroids claimed
+        // strangers' speech and put people who were never present into the
+        // transcript. Merge the duplicates, drop the fragments, compact the
+        // numbering.
+        migrator.registerMigration("v11-speaker-sweep") { db in
+            // Same name, several fingerprints (the "three Vasilis chips"
+            // case): keep the earliest and repoint everything at it.
+            try db.execute(sql: """
+                UPDATE transcript_segments SET speaker_id = (
+                    SELECT k.id FROM speaker_profiles k
+                    JOIN speaker_profiles p ON p.id = transcript_segments.speaker_id
+                    WHERE k.name IS NOT NULL AND k.name <> '' AND k.name = p.name
+                    ORDER BY k.ordinal LIMIT 1)
+                WHERE speaker_id IN (
+                    SELECT id FROM speaker_profiles WHERE name IS NOT NULL AND name <> '')
+                """)
+            // "SELECT id, MIN(ordinal) ... GROUP BY name" is SQLite's defined
+            // idiom for "the id of the row holding the minimum".
+            try db.execute(sql: """
+                DELETE FROM speaker_profiles WHERE name IS NOT NULL AND name <> ''
+                AND id NOT IN (
+                    SELECT id FROM (
+                        SELECT id, MIN(ordinal) FROM speaker_profiles
+                        WHERE name IS NOT NULL AND name <> '' GROUP BY name))
+                """)
+
+            // Unnamed fingerprints backed by almost no speech are noise, not
+            // people. Their segments fall back to "Others", which is honest.
+            try db.execute(sql: """
+                DELETE FROM speaker_profiles WHERE (name IS NULL OR name = '')
+                AND (SELECT COUNT(*) FROM transcript_segments s
+                     WHERE s.speaker_id = speaker_profiles.id) < 5
+                """)
+            try db.execute(sql: """
+                UPDATE transcript_segments SET speaker_id = NULL, speaker = NULL
+                WHERE speaker_id IS NOT NULL
+                AND speaker_id NOT IN (SELECT id FROM speaker_profiles)
+                """)
+
+            // Compact the ordinals so new voices start from a small number
+            // again instead of continuing past "Speaker 56". Done row by row
+            // in Swift: a self-referential UPDATE would read ordinals it had
+            // already rewritten.
+            let survivors = try String.fetchAll(db, sql:
+                "SELECT id FROM speaker_profiles ORDER BY ordinal")
+            for (index, id) in survivors.enumerated() {
+                try db.execute(sql: "UPDATE speaker_profiles SET ordinal = ? WHERE id = ?",
+                               arguments: [index + 1, id])
+            }
+            try db.execute(sql: """
+                UPDATE transcript_segments SET speaker =
+                    'Speaker ' || (SELECT p.ordinal FROM speaker_profiles p
+                                   WHERE p.id = transcript_segments.speaker_id)
+                WHERE speaker_id IN (
+                    SELECT id FROM speaker_profiles WHERE name IS NULL OR name = '')
+                """)
+        }
         try migrator.migrate(dbQueue)
     }
 
@@ -611,17 +672,28 @@ final class ContextStore: @unchecked Sendable {
         try dbQueue.write { db in
             try db.execute(sql: "UPDATE speaker_profiles SET name = ?, updated_at = ? WHERE id = ?",
                            arguments: [finalName, Date().timeIntervalSince1970, id.uuidString])
-            // Relabel past transcript segments. When cleared, fall back to the
-            // stored ordinal so the row reads "Speaker N" again.
+            // Relabel past transcript segments.
             if let finalName {
                 try db.execute(sql: "UPDATE transcript_segments SET speaker = ? WHERE speaker_id = ?",
                                arguments: [finalName, id.uuidString])
-            } else if let ordinal = try Int.fetchOne(db,
-                        sql: "SELECT ordinal FROM speaker_profiles WHERE id = ?",
-                        arguments: [id.uuidString]) {
-                try db.execute(sql: "UPDATE transcript_segments SET speaker = ? WHERE speaker_id = ?",
-                               arguments: ["Speaker \(ordinal)", id.uuidString])
             }
+        }
+        // Clearing a name puts the voice back to "Speaker N" — renumbered
+        // per call, so it reads as the Nth voice of that meeting rather than
+        // the Nth voice the app has ever heard.
+        if finalName == nil {
+            for callID in try callsFeaturing(speaker: id) {
+                try relabelUnnamedSpeakers(callID: callID)
+            }
+        }
+    }
+
+    /// Calls whose transcript contains this voice.
+    func callsFeaturing(speaker id: UUID) throws -> [UUID] {
+        try dbQueue.read { db in
+            try String.fetchAll(db, sql: """
+                SELECT DISTINCT call_id FROM transcript_segments WHERE speaker_id = ?
+                """, arguments: [id.uuidString]).compactMap(UUID.init(uuidString:))
         }
     }
 
@@ -700,6 +772,63 @@ final class ContextStore: @unchecked Sendable {
                 UPDATE speaker_profiles SET sample_count = ?, updated_at = ? WHERE id = ?
                 """, arguments: [max(1, sourceSamples - segmentCount), now, source.uuidString])
             return newID
+        }
+    }
+
+    /// Rewrite who said what for one call, as decided by the end-of-call
+    /// diarization pass (CallSpeakerFinalizer). A nil speaker means the pass
+    /// couldn't attribute the span, which shows as "Others".
+    func applySpeakerAssignments(
+        callID: UUID,
+        _ assignments: [(segmentID: UUID, speakerID: UUID?, label: String?)]
+    ) throws {
+        guard !assignments.isEmpty else { return }
+        try dbQueue.write { db in
+            for a in assignments {
+                try db.execute(sql: """
+                    UPDATE transcript_segments SET speaker_id = ?, speaker = ?
+                    WHERE id = ? AND call_id = ?
+                    """, arguments: [a.speakerID?.uuidString, a.label,
+                                     a.segmentID.uuidString, callID.uuidString])
+            }
+        }
+    }
+
+    /// Drop unnamed fingerprints nothing points at any more — the provisional
+    /// voices the streaming pass minted mid-call and the offline pass then
+    /// folded together. Named voices are always kept, even when idle, because
+    /// the user asked for them by name.
+    @discardableResult
+    func deleteUnreferencedUnnamedProfiles() throws -> Int {
+        try dbQueue.write { db in
+            try db.execute(sql: """
+                DELETE FROM speaker_profiles WHERE (name IS NULL OR name = '')
+                AND id NOT IN (SELECT DISTINCT speaker_id FROM transcript_segments
+                               WHERE speaker_id IS NOT NULL)
+                """)
+            return db.changesCount
+        }
+    }
+
+    /// Number the call's unnamed voices "Speaker 1…N" in first-heard order,
+    /// scoped to THIS call. A global counter is an implementation detail the
+    /// reader shouldn't see: a four-person meeting reads "Speaker 1-4" however
+    /// many voices the database has met before.
+    func relabelUnnamedSpeakers(callID: UUID) throws {
+        try dbQueue.write { db in
+            let ids = try String.fetchAll(db, sql: """
+                SELECT s.speaker_id FROM transcript_segments s
+                JOIN speaker_profiles p ON p.id = s.speaker_id
+                WHERE s.call_id = ? AND s.speaker_id IS NOT NULL
+                AND (p.name IS NULL OR p.name = '')
+                GROUP BY s.speaker_id ORDER BY MIN(s.t0)
+                """, arguments: [callID.uuidString])
+            for (index, id) in ids.enumerated() {
+                try db.execute(sql: """
+                    UPDATE transcript_segments SET speaker = ?
+                    WHERE call_id = ? AND speaker_id = ?
+                    """, arguments: ["Speaker \(index + 1)", callID.uuidString, id])
+            }
         }
     }
 

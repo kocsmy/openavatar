@@ -116,6 +116,10 @@ final class AppState: ObservableObject {
     private(set) lazy var sanitizer = ReviewSanitizer(router: router)
 
     private(set) lazy var diarizer = SpeakerDiarizer()
+    /// The call's audio, kept only long enough for the end-of-call speaker
+    /// pass to re-cluster it (see CallAudioRecorder / CallSpeakerFinalizer).
+    private let callAudio = CallAudioRecorder()
+    private(set) lazy var speakerFinalizer = CallSpeakerFinalizer(store: store)
     private lazy var calendar = GoogleCalendarClient(
         tokenProvider: { try await GoogleOAuth.shared.accessToken() })
     private var capture: AudioCaptureService?
@@ -354,6 +358,11 @@ final class AppState: ObservableObject {
                 await detector.updateWakePhrase(settings.assistantName)
                 await detector.beginCall()   // no rolling context from the last call
                 await diarizer.beginCall()   // reload fingerprints, fresh call state
+                if settings.diarizationEnabled {
+                    // Buffer the call's audio so the end-of-call pass can
+                    // cluster all of it at once; deleted as soon as it has.
+                    await callAudio.begin(callID: callID)
+                }
             }
             refreshCalendar()            // identify who's on the call
 #if canImport(AppKit)
@@ -506,11 +515,10 @@ final class AppState: ObservableObject {
                 try? store.endCall(callID, summary: summary.isEmpty ? nil : summary)
 
                 // Persist the evolved voice centroids so the next call's
-                // enrollment recognizes everyone faster. (In-call merging is
-                // the backend's job now — its clustering keeps one id per
-                // voice, so there are no stray speakers to fold.)
+                // enrollment recognizes everyone faster.
                 if settings.diarizationEnabled {
                     await diarizer.endCall()
+                    await finalizeSpeakers(callID: callID)
                 }
             }
 #if canImport(AppKit)
@@ -529,7 +537,8 @@ final class AppState: ObservableObject {
                     let outcome = try await consolidator.consolidate(
                         callID: callID, callStart: callStart ?? Date(),
                         extractFollowUps: settings.followUpsEnabled,
-                        guessSpeakerNames: settings.diarizationEnabled)
+                        guessSpeakerNames: settings.diarizationEnabled,
+                        attendees: callAttendees.map(\.name))
                     if !outcome.notes.isEmpty, currentCallID == callID {
                         reviewCallNotes = outcome.notes
                     }
@@ -669,6 +678,9 @@ final class AppState: ObservableObject {
             refreshCallAppLabel(detected: callDetector.detectActiveCall(
                 conferenceService: currentEvent?.conferenceService))
         }
+        if settings.diarizationEnabled, chunk.source == .system {
+            Task { await callAudio.append(chunk) }
+        }
         Task {
             do {
                 let transcriber = makeTranscriber()
@@ -738,6 +750,42 @@ final class AppState: ObservableObject {
             reportError(error)
             return nil
         }
+    }
+
+    /// Re-cluster the finished call from its whole recording and bring the
+    /// transcript in line with the result.
+    ///
+    /// The live labels were assigned 15 seconds at a time; this is the first
+    /// point where the app can see every utterance a person made and decide
+    /// how many people there actually were. Runs before the consolidation
+    /// pass, so the LLM is asked to name settled voices rather than the
+    /// provisional ones streaming invented.
+    private func finalizeSpeakers(callID: UUID) async {
+        guard let audioURL = await callAudio.finish() else { return }
+        // Invitees bound how many voices the clusterer may find — a ceiling,
+        // never an exact count, since invitations are not attendance and a
+        // no-show must not force the clusterer to invent someone. Without a
+        // calendar event it auto-detects as before.
+        let ceiling = callAttendees.isEmpty ? nil : callAttendees.count + 1
+        _ = await speakerFinalizer.finalize(callID: callID, audioURL: audioURL,
+                                            maxSpeakers: ceiling)
+        await callAudio.discard()
+        await diarizer.reset()
+
+        if currentCallID == callID {
+            let stored = (try? store.segments(callID: callID)) ?? []
+            let bySegment = Dictionary(stored.map { ($0.id, $0) }, uniquingKeysWith: { a, _ in a })
+            for i in liveSegments.indices {
+                guard let fresh = bySegment[liveSegments[i].id] else { continue }
+                liveSegments[i].speaker = fresh.speaker
+                liveSegments[i].speakerID = fresh.speakerID
+            }
+        }
+#if canImport(WebKit)
+        // The stored transcript changed underneath any open window.
+        WebEventBus.shared.emit(.transcript)
+        WebEventBus.shared.emit(.meetings)
+#endif
     }
 
     // MARK: - Speakers in the current call (for the editable roster UI)
