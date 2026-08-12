@@ -98,9 +98,13 @@ export function TranscriptionPage() {
     },
   ];
 
-  const activeWhisperModel = MODEL_FILE_TO_ID[
-    Object.keys(MODEL_FILE_TO_ID).find((f) => s.whisperModelPath.endsWith(f)) ?? ""
-  ];
+  // Prefer the live status (updates when a model switch finishes) over the
+  // initial snapshot path.
+  const activeModelFile =
+    status?.whisper.activeModel ??
+    Object.keys(MODEL_FILE_TO_ID).find((f) => s.whisperModelPath.endsWith(f)) ??
+    "";
+  const activeWhisperModel = MODEL_FILE_TO_ID[activeModelFile];
 
   return (
     <Page title="Transcription" description="Which engine hears your calls, and how.">
