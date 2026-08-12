@@ -10,7 +10,6 @@ import "./index.css";
  */
 const Settings = React.lazy(() => import("./App"));
 const Main = React.lazy(() => import("./surfaces/Main"));
-const Call = React.lazy(() => import("./surfaces/Call"));
 const Onboarding = React.lazy(() => import("./surfaces/Onboarding"));
 const MenuBar = React.lazy(() => import("./surfaces/MenuBar"));
 
@@ -21,8 +20,6 @@ function Surface() {
   switch (surface) {
     case "main":
       return <Main />;
-    case "call":
-      return <Call />;
     case "onboarding":
       return <Onboarding />;
     case "menu":

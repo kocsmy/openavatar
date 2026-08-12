@@ -52,7 +52,6 @@ final class AppBridge {
             switch params["window"]?.stringValue {
             case "settings": WebWindowController.shared.show(.settings, section: section)
             case "main": WebWindowController.shared.show(.main, section: section)
-            case "call": WebWindowController.shared.show(.call)
             case "onboarding": WebWindowController.shared.show(.onboarding)
             default: throw AppError.integration("Unknown window")
             }

@@ -48,9 +48,9 @@ final class WebBridgeTests: XCTestCase {
         // Two windows sharing an id would share a frame autosave name and
         // fight over the same saved frame; a surface the bundle doesn't know
         // mounts the settings root instead (see web/src/lib/surface.ts).
-        let specs: [WebHost.Spec] = [.settings, .main, .call, .onboarding]
+        let specs: [WebHost.Spec] = [.settings, .main, .onboarding]
         XCTAssertEqual(Set(specs.map(\.id)).count, specs.count)
-        let known = Set(["settings", "main", "call", "onboarding", "menu"])
+        let known = Set(["settings", "main", "onboarding", "menu"])
         for spec in specs {
             XCTAssertTrue(known.contains(spec.surface), "unknown surface \(spec.surface)")
         }

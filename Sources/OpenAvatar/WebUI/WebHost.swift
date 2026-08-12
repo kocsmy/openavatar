@@ -22,9 +22,6 @@ enum WebHost {
         static let main = Spec(id: "main", title: "OpenAvatar", surface: "main",
                                size: NSSize(width: 1120, height: 760),
                                minSize: NSSize(width: 900, height: 600))
-        static let call = Spec(id: "call", title: "Call notes", surface: "call",
-                               size: NSSize(width: 720, height: 640),
-                               minSize: NSSize(width: 520, height: 420))
         static let onboarding = Spec(id: "onboarding", title: "Welcome", surface: "onboarding",
                                      size: NSSize(width: 760, height: 600), minSize: nil)
     }

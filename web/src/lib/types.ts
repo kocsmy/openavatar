@@ -202,7 +202,7 @@ export interface UIBridgeAPI {
   "ui.resize": [{ height: number }, Record<string, never>];
   /** Open another window. `section` deep-links a settings section. */
   "window.open": [
-    { window: "settings" | "main" | "call" | "onboarding"; section?: string },
+    { window: "settings" | "main" | "onboarding"; section?: string },
     Record<string, never>,
   ];
   /** Close the window this page is rendered in (onboarding "Finish"). */

@@ -29,7 +29,6 @@ const SURFACES = [
     viewport: { width: 1120, height: 760 },
     sections: ["home", "meetings", "followups", "metrics"],
   },
-  { id: "call", viewport: { width: 720, height: 640 }, sections: [""] },
   { id: "onboarding", viewport: { width: 760, height: 600 }, sections: [""] },
   // The popover is 380 wide and as tall as its content — capture all of it.
   { id: "menu", viewport: { width: 380, height: 700 }, sections: [""], fullPage: true },

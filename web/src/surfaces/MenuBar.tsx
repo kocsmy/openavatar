@@ -145,7 +145,7 @@ export default function MenuBarSurface() {
       <MenuRows
         version={settingsSnap?.version ?? ""}
         onOpenMain={() => void bridge("window.open", { window: "main" })}
-        onOpenCall={() => void bridge("window.open", { window: "call" })}
+        onOpenCall={() => void bridge("window.open", { window: "main", section: "meetings" })}
         onCheckUpdates={() => void bridge("app.checkUpdates", {})}
       />
       <Separator className="bg-border/60" />

@@ -5,7 +5,7 @@ import AppKit
 
 /// Menu-bar popover, Granola-style: recording toggle, the next meetings, the
 /// last call's pending actions, and quick menu rows. The live transcript
-/// lives in the call window (CallNotesWindowView), not here.
+/// lives at the top of the Meetings list, not here.
 struct MenuBarView: View {
     @EnvironmentObject var app: AppState
     @EnvironmentObject var settings: SettingsStore
@@ -295,7 +295,7 @@ struct MenuBarView: View {
             menuRow("Open OpenAvatar", icon: "macwindow") { openSettingsAndFocus() }
             menuRow("Call notes & transcript", icon: "note.text") {
 #if canImport(AppKit)
-                WindowManager.shared.showCallWindow()
+                WindowManager.shared.showCallNotes()
 #endif
             }
             HStack(spacing: 8) {

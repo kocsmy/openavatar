@@ -369,9 +369,10 @@ final class AppState: ObservableObject {
             }
             refreshCalendar()            // identify who's on the call
 #if canImport(AppKit)
-            // Granola-style: the call window (your notes + live transcript)
-            // appears in the background without stealing focus from the call.
-            WindowManager.shared.showCallWindow(focus: false)
+            // Granola-style: your notes + the live transcript appear at the
+            // top of Meetings, in the background, without stealing focus from
+            // the call itself.
+            WindowManager.shared.showCallNotes(focus: false)
 #endif
         } catch {
             reportError(error)
@@ -415,12 +416,12 @@ final class AppState: ObservableObject {
         previewEvent = nil
     }
 
-    /// Open the call window on an upcoming meeting so notes can be written
-    /// ahead of time (they carry into the call once it starts).
+    /// Open Meetings on an upcoming meeting so notes can be written ahead of
+    /// time (they carry into the call once it starts).
     func openEventNotes(_ event: CalendarEvent) {
         previewEvent = event
 #if canImport(AppKit)
-        WindowManager.shared.showCallWindow()
+        WindowManager.shared.showCallNotes()
 #endif
     }
 
@@ -525,10 +526,10 @@ final class AppState: ObservableObject {
                 }
             }
 #if canImport(AppKit)
-            // The call window flips from live notes to the finished meeting's
-            // page (Actions / Summary / Transcript) — bring it forward so the
-            // detected items are one glance away. No separate review window.
-            WindowManager.shared.showCallWindow()
+            // The pinned live row gives way to the finished meeting's own
+            // page (Actions / Summary / Transcript) — bring Meetings forward
+            // so the detected items are one glance away.
+            WindowManager.shared.showCallNotes()
 #endif
             // One post-call LLM pass does it all — digest + notes, memory
             // facts, follow-ups, and speaker names — instead of three
