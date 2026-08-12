@@ -40,6 +40,16 @@ else
   echo "▸ no built-in Google OAuth client — calendar will use the Advanced (BYO) fields"
 fi
 
+# Web settings UI (the shadcn experiment): CI builds web/dist with
+# `npm ci && npm run build` before packaging. Must be copied before codesign
+# so the signature seals it.
+if [[ -d web/dist ]]; then
+  echo "▸ bundling web settings UI (Resources/WebUI)"
+  cp -R web/dist "${APP}/Contents/Resources/WebUI"
+else
+  echo "⚠ web/dist missing — the Settings window will show a placeholder. Build it: cd web && npm ci && npm run build"
+fi
+
 # App icon: generate AppIcon.icns from the 1024 master via sips + iconutil.
 ICON_MASTER="design/icon-master-1024.png"
 if [[ -f "${ICON_MASTER}" ]]; then

@@ -339,7 +339,7 @@ struct MenuBarView: View {
             .help("Passive: review after the call. Active: executes immediately when you address \(settings.assistantName) by name.")
 
             Spacer()
-            Button { openSettingsAndFocus() } label: { Image(systemName: "gearshape") }
+            Button { openWebSettings() } label: { Image(systemName: "gearshape") }
                 .buttonStyle(.borderless)
                 .help("Settings")
             Button { NSApp.terminate(nil) } label: { Image(systemName: "power") }
@@ -354,6 +354,14 @@ struct MenuBarView: View {
     private func openSettingsAndFocus() {
 #if canImport(AppKit)
         WindowManager.shared.showMain()
+#endif
+    }
+
+    /// The web-rendered Settings window (shadcn UI experiment) — setup moved
+    /// there; the main window keeps Home and the Library.
+    private func openWebSettings() {
+#if canImport(WebKit) && canImport(AppKit)
+        WebSettingsWindowController.shared.show()
 #endif
     }
 
