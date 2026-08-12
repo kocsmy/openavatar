@@ -3,6 +3,15 @@
  * Sources/OpenAvatar/WebUI/SettingsBridge.swift — keep the two in sync.
  */
 
+import type { HomeAPI } from "./types/home";
+import type { MetricsAPI } from "./types/metrics";
+import type { MeetingsAPI } from "./types/meetings";
+import type { FollowupsAPI } from "./types/followups";
+import type { CallAPI } from "./types/call";
+import type { OnboardingAPI } from "./types/onboarding";
+import type { MenuAPI } from "./types/menu";
+
+
 export type AssistantMode = "passive" | "active";
 export type TranscriptionMode = "local" | "parakeet" | "qwen" | "cloud";
 export type EmailBackend = "smtp" | "gmail";
@@ -140,7 +149,7 @@ export interface ErrorEntry {
 }
 
 /** method name → [params, result] */
-export interface BridgeAPI {
+export interface SettingsBridgeAPI {
   "settings.snapshot": [Record<string, never>, Snapshot];
   "settings.set": [{ key: keyof Settings; value: string | number | boolean }, Record<string, never>];
   "secrets.save": [{ key: SecretKey; value: string }, Record<string, never>];
@@ -183,4 +192,38 @@ export interface BridgeAPI {
   "app.openManifestsFolder": [Record<string, never>, Record<string, never>];
 }
 
+/*
+ * The full contract is the settings window's methods plus one interface per
+ * surface, each declared next to the page that uses it (web/src/lib/types/).
+ * Swift's side is split the same way, one file per bridge.
+ */
+export interface UIBridgeAPI {
+  /** Content height for the surfaces the host has to size itself (popover). */
+  "ui.resize": [{ height: number }, Record<string, never>];
+  /** Open another window. `section` deep-links a settings section. */
+  "window.open": [
+    { window: "settings" | "main" | "call" | "onboarding"; section?: string },
+    Record<string, never>,
+  ];
+  /** Close the window this page is rendered in (onboarding "Finish"). */
+  "window.close": [Record<string, never>, Record<string, never>];
+}
+
+export interface BridgeAPI
+  extends SettingsBridgeAPI,
+    UIBridgeAPI,
+    HomeAPI,
+    MetricsAPI,
+    MeetingsAPI,
+    FollowupsAPI,
+    CallAPI,
+    OnboardingAPI,
+    MenuAPI {}
+
 export type BridgeMethod = keyof BridgeAPI;
+
+/**
+ * What the host pushes when something changed. The page refetches rather than
+ * receiving a diff — see WebEventBus.swift.
+ */
+export type EventTopic = "state" | "transcript" | "meetings" | "followups" | "errors";

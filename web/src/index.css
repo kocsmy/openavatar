@@ -112,3 +112,14 @@ textarea,
   user-select: text;
   -webkit-user-select: text;
 }
+
+/*
+ * The menu-bar popover floats over whatever you were doing — it draws its own
+ * translucent panel so the system vibrancy shows through, and the window that
+ * hosts it is transparent (WebHost.makeWebView(transparent:)).
+ */
+html[data-surface="menu"],
+html[data-surface="menu"] body {
+  height: auto;
+  background: transparent;
+}

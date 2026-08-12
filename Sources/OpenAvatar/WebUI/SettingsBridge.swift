@@ -20,7 +20,7 @@ final class SettingsBridge {
 
     // MARK: Dispatch
 
-    func handle(method: String, params: JSONValue) async throws -> JSONValue {
+    func handle(method: String, params: JSONValue) async throws -> JSONValue? {
         switch method {
         case "settings.snapshot": return snapshot()
         case "settings.set": return try setSetting(params)
@@ -70,7 +70,7 @@ final class SettingsBridge {
 #endif
             return .object([:])
         default:
-            throw AppError.integration("Unknown bridge method: \(method)")
+            return nil   // not ours — AppBridge tries the next bridge
         }
     }
 
