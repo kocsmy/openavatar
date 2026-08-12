@@ -11,6 +11,8 @@ declare global {
     };
     /** Called by the Swift host (WebEventBus) when app state changes. */
     __avatarEvent?: (topic: EventTopic) => void;
+    /** Called by the host with each chunk of an answer being written. */
+    __avatarStream?: (payload: { id: string; delta?: string }) => void;
   }
 }
 
@@ -59,6 +61,34 @@ export function onEvent(listener: Listener): () => void {
 /** Fire an event locally — used by mocks and by pages after their own writes. */
 export function emitLocal(topic: EventTopic) {
   window.__avatarEvent?.(topic);
+}
+
+/*
+ * Streamed answers. The only host push that carries data rather than a nudge:
+ * a token can't be refetched, and waiting for the finished reply is the thing
+ * streaming exists to avoid. The bridge call still resolves with the whole
+ * answer, so these deltas are strictly an early view of it — a page that never
+ * receives one still ends up correct.
+ */
+type StreamListener = (delta: string) => void;
+const streams = new Map<string, StreamListener>();
+let streamCounter = 0;
+
+window.__avatarStream = (payload) => {
+  if (!payload?.id || typeof payload.delta !== "string") return;
+  streams.get(payload.id)?.(payload.delta);
+};
+
+/** Claim a stream id and start listening. Returns the id and a stop function. */
+export function openStream(listener: StreamListener): { id: string; close: () => void } {
+  const id = `s${++streamCounter}-${Date.now()}`;
+  streams.set(id, listener);
+  return { id, close: () => streams.delete(id) };
+}
+
+/** Feed a stream locally — used by the mocks to imitate the host's push. */
+export function emitStreamLocal(id: string, delta: string) {
+  window.__avatarStream?.({ id, delta });
 }
 
 /**

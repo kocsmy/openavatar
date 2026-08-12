@@ -216,14 +216,33 @@ final class MeetingsBridge {
         let answer = try await chat.ask(
             callID: call.id,
             question: params["question"]?.stringValue ?? "",
-            history: Self.turns(params["history"]))
+            history: Self.turns(params["history"]),
+            onDelta: Self.deltaSink(params))
         return Self.encodeAnswer(answer)
     }
 
     private func search(_ params: JSONValue) async throws -> JSONValue {
         let answer = try await chat.search(query: params["query"]?.stringValue ?? "",
-                                           history: Self.turns(params["history"]))
+                                           history: Self.turns(params["history"]),
+                                           onDelta: Self.deltaSink(params))
         return Self.encodeAnswer(answer)
+    }
+
+    /// Text is pushed as it is written when the page asked for a stream, and
+    /// the call still resolves with the whole answer either way — so a page
+    /// that misses the events, or a provider with no real streaming, simply
+    /// shows the finished text instead of failing.
+    private static func deltaSink(_ params: JSONValue) -> (@Sendable (String) -> Void)? {
+        guard let streamID = params["streamID"]?.stringValue, !streamID.isEmpty else { return nil }
+#if canImport(WebKit)
+        return { chunk in
+            Task { @MainActor in
+                WebEventBus.shared.emit(stream: streamID, ["delta": .string(chunk)])
+            }
+        }
+#else
+        return nil
+#endif
     }
 
     private static func encodeAnswer(_ answer: MeetingChat.Answer) -> JSONValue {

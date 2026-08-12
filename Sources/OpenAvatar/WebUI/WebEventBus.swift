@@ -58,5 +58,22 @@ final class WebEventBus {
             box.view?.evaluateJavaScript(js)
         }
     }
+
+    /// The one case that carries data rather than a "refetch" nudge: an answer
+    /// being written. Refetching can't express a token, and waiting for the
+    /// whole reply is exactly what streaming exists to avoid. Keyed by a
+    /// caller-supplied id so a page can tell its own stream from another
+    /// window's.
+    func emit(stream id: String, _ payload: [String: JSONValue]) {
+        views.removeAll { $0.view == nil }
+        guard !views.isEmpty else { return }
+        var object = payload
+        object["id"] = .string(id)
+        guard let json = String(data: JSONValue.object(object).encodedData(), encoding: .utf8) else { return }
+        let js = "window.__avatarStream && window.__avatarStream(\(json))"
+        for box in views {
+            box.view?.evaluateJavaScript(js)
+        }
+    }
 }
 #endif

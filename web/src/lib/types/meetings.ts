@@ -103,8 +103,14 @@ export interface MeetingsAPI {
   "meetings.copyTranscript": [{ callID: string }, { message: string }];
   "meetings.exportMarkdown": [{ callID: string }, { message: string }];
   "meetings.saveUserNotes": [{ callID: string; notes: string }, Record<string, never>];
-  /** Follow-up question about one meeting. */
-  "meetings.ask": [{ callID: string; question: string; history: ChatTurn[] }, ChatAnswer];
+  /**
+   * Follow-up question about one meeting. Pass `streamID` (from openStream) to
+   * receive the answer as it is written; the call still resolves with all of it.
+   */
+  "meetings.ask": [
+    { callID: string; question: string; history: ChatTurn[]; streamID?: string },
+    ChatAnswer,
+  ];
   /** Question across the whole library — the model picks which calls to read. */
-  "meetings.search": [{ query: string; history: ChatTurn[] }, ChatAnswer];
+  "meetings.search": [{ query: string; history: ChatTurn[]; streamID?: string }, ChatAnswer];
 }

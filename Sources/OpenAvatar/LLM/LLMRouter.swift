@@ -102,6 +102,37 @@ actor LLMRouter {
         }
     }
 
+    /// Same routing and usage accounting as `complete`, delivered as events.
+    /// Deliberately never retried: a stream that fails partway has already
+    /// handed text to the caller, and starting over would repeat it.
+    func stream(task: LLMTask, _ request: LLMRequest) throws -> AsyncThrowingStream<LLMEvent, Error> {
+        var request = request
+        let route = try route(for: task)
+        if request.model.isEmpty { request.model = route.model }
+        let provider = try self.provider(for: route.provider)
+        let upstream = provider.stream(request)
+        let model = request.model
+        let store = self.store
+
+        return AsyncThrowingStream { continuation in
+            let pump = Task {
+                do {
+                    for try await event in upstream {
+                        if case .done(let usage) = event {
+                            try? store?.recordUsage(provider: route.provider, model: model,
+                                                    task: task, usage: usage)
+                        }
+                        continuation.yield(event)
+                    }
+                    continuation.finish()
+                } catch {
+                    continuation.finish(throwing: error)
+                }
+            }
+            continuation.onTermination = { _ in pump.cancel() }
+        }
+    }
+
     func listModels(provider id: ProviderID) async throws -> [ModelInfo] {
         try await provider(for: id).listModels()
     }

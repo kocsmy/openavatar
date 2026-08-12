@@ -164,4 +164,30 @@ struct HTTPClient: Sendable {
         let data = try await send("GET", url, headers: headers)
         return try JSONValue.parse(data)
     }
+
+    /// POST that yields the response body line by line, for server-sent
+    /// events. The status check has to drain a little of the body to report a
+    /// useful error, since the failure arrives as JSON on the same stream.
+    func postSSE(_ url: URL, headers: [String: String] = [:],
+                 body: JSONValue) async throws -> AsyncLineSequence<URLSession.AsyncBytes> {
+        var request = URLRequest(url: url, timeoutInterval: timeout)
+        request.httpMethod = "POST"
+        for (k, v) in headers { request.setValue(v, forHTTPHeaderField: k) }
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.httpBody = body.encodedData()
+
+        let (bytes, response) = try await URLSession.shared.bytes(for: request)
+        guard let http = response as? HTTPURLResponse else {
+            throw AppError.http(status: -1, body: "no HTTP response")
+        }
+        guard (200...299).contains(http.statusCode) else {
+            var text = ""
+            for try await line in bytes.lines {
+                text += line
+                if text.count > 2000 { break }
+            }
+            throw AppError.http(status: http.statusCode, body: Redactor.redact(text))
+        }
+        return bytes.lines
+    }
 }

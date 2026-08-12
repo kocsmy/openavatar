@@ -1,6 +1,7 @@
 import * as React from "react";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
+import { Markdown } from "@/components/markdown";
 import { ArrowUp, Loader2, Sparkles, X } from "lucide-react";
 
 /**
@@ -15,11 +16,15 @@ export interface ChatItem {
   failed?: boolean;
   /** Meetings this answer drew on. */
   callIDs?: string[];
+  /** Still being written — draws a cursor and suppresses the busy row. */
+  streaming?: boolean;
 }
 
 /** The turns to send back as history — failures would only confuse the model. */
 export function historyOf(thread: ChatItem[]): { role: "user" | "assistant"; content: string }[] {
-  return thread.filter((t) => !t.failed).map(({ role, content }) => ({ role, content }));
+  return thread
+    .filter((t) => !t.failed && !t.streaming)
+    .map(({ role, content }) => ({ role, content }));
 }
 
 export function ChatThread({
@@ -37,7 +42,7 @@ export function ChatThread({
   const endRef = React.useRef<HTMLDivElement>(null);
   React.useEffect(() => {
     endRef.current?.scrollIntoView({ block: "end", behavior: "smooth" });
-  }, [thread.length, busy]);
+  }, [thread.length, busy, thread[thread.length - 1]?.content]);
 
   if (thread.length === 0 && !busy) return null;
 
@@ -56,15 +61,21 @@ export function ChatThread({
               <Sparkles
                 className={cn("mt-0.5 size-3.5 shrink-0", item.failed ? "text-destructive" : "text-primary")}
               />
-              <p
-                className={cn(
-                  "min-w-0 flex-1 whitespace-pre-wrap text-[13.5px] leading-relaxed",
-                  item.failed && "text-destructive",
-                )}
-                data-selectable
-              >
-                {item.content}
-              </p>
+              {item.failed ? (
+                <p className="min-w-0 flex-1 whitespace-pre-wrap text-[13.5px] leading-relaxed text-destructive" data-selectable>
+                  {item.content}
+                </p>
+              ) : (
+                // Answers come back as Markdown, the same as the meeting notes
+                // do — rendering them as raw text left asterisks and dashes on
+                // screen.
+                <div className="min-w-0 flex-1">
+                  <Markdown markdown={item.content} />
+                  {item.streaming ? (
+                    <span className="ml-0.5 inline-block h-3.5 w-[2px] animate-pulse bg-primary align-middle" />
+                  ) : null}
+                </div>
+              )}
             </div>
             {item.callIDs?.length && renderCitations ? (
               <div className="flex flex-wrap gap-1.5 pl-5.5">{renderCitations(item.callIDs)}</div>
@@ -72,7 +83,7 @@ export function ChatThread({
           </div>
         ),
       )}
-      {busy ? (
+      {busy && !thread[thread.length - 1]?.streaming ? (
         <div className="flex items-center gap-2 text-muted-foreground">
           <Loader2 className="size-3.5 animate-spin" />
           <span className="text-[13px]">Reading the transcript…</span>

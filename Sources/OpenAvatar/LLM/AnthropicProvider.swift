@@ -138,6 +138,77 @@ struct AnthropicProvider: LLMProvider {
         return try Self.decode(json)
     }
 
+    /// True SSE streaming, so an answer can be shown as it is written instead
+    /// of arriving as a finished wall of text. Overrides the protocol's
+    /// complete-then-emit default; providers without an override still work,
+    /// they just deliver the whole answer in one delta.
+    func stream(_ req: LLMRequest) -> AsyncThrowingStream<LLMEvent, Error> {
+        AsyncThrowingStream { continuation in
+            let pump = Task {
+                do {
+                    var body = Self.encode(req).objectValue ?? [:]
+                    body["stream"] = .bool(true)
+                    let lines = try await http.postSSE(baseURL.appendingPathComponent("messages"),
+                                                       headers: headers, body: .object(body))
+                    var usage = Usage()
+                    // Tool calls stream as a name up front and their arguments
+                    // as JSON fragments, so they are reassembled per block.
+                    var toolIDs: [Int: String] = [:]
+                    var toolNames: [Int: String] = [:]
+                    var toolArgs: [Int: String] = [:]
+
+                    for try await line in lines {
+                        guard line.hasPrefix("data:") else { continue }
+                        let payload = line.dropFirst(5).trimmingCharacters(in: .whitespaces)
+                        guard !payload.isEmpty, payload != "[DONE]",
+                              let json = try? JSONValue.parse(Data(payload.utf8)) else { continue }
+
+                        switch json["type"]?.stringValue {
+                        case "message_start":
+                            let reported = json["message"]?["usage"]
+                            usage.inputTokens = reported?["input_tokens"]?.intValue ?? 0
+                            usage.cacheReadTokens = reported?["cache_read_input_tokens"]?.intValue ?? 0
+                            usage.cacheWriteTokens = reported?["cache_creation_input_tokens"]?.intValue ?? 0
+                        case "content_block_start":
+                            if let index = json["index"]?.intValue,
+                               json["content_block"]?["type"]?.stringValue == "tool_use" {
+                                toolIDs[index] = json["content_block"]?["id"]?.stringValue ?? ""
+                                toolNames[index] = json["content_block"]?["name"]?.stringValue ?? ""
+                                toolArgs[index] = ""
+                            }
+                        case "content_block_delta":
+                            if let text = json["delta"]?["text"]?.stringValue, !text.isEmpty {
+                                continuation.yield(.textDelta(text))
+                            } else if let fragment = json["delta"]?["partial_json"]?.stringValue,
+                                      let index = json["index"]?.intValue {
+                                toolArgs[index, default: ""] += fragment
+                            }
+                        case "content_block_stop":
+                            if let index = json["index"]?.intValue, let name = toolNames[index] {
+                                let raw = toolArgs[index] ?? "{}"
+                                let arguments = (try? JSONValue.parse(Data(raw.utf8))) ?? .object([:])
+                                continuation.yield(.toolCall(ToolCall(id: toolIDs[index] ?? "",
+                                                                      name: name,
+                                                                      arguments: arguments)))
+                            }
+                        case "message_delta":
+                            if let out = json["usage"]?["output_tokens"]?.intValue {
+                                usage.outputTokens = out
+                            }
+                        default:
+                            break
+                        }
+                    }
+                    continuation.yield(.done(usage))
+                    continuation.finish()
+                } catch {
+                    continuation.finish(throwing: error)
+                }
+            }
+            continuation.onTermination = { _ in pump.cancel() }
+        }
+    }
+
     func listModels() async throws -> [ModelInfo] {
         let json = try await http.getJSON(baseURL.appendingPathComponent("models"), headers: headers)
         return (json["data"]?.arrayValue ?? []).compactMap { model in

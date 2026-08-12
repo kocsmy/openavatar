@@ -1,5 +1,5 @@
 import * as React from "react";
-import { bridge } from "@/lib/bridge";
+import { bridge, openStream } from "@/lib/bridge";
 import { EmptyState, Toolbar, useLive } from "@/components/live";
 import type { MeetingSummary } from "@/lib/types/meetings";
 import { Badge } from "@/components/ui/badge";
@@ -204,15 +204,36 @@ export function MeetingsPage() {
     const history = historyOf(thread);
     setThread((t) => [...t, { role: "user", content: question }]);
     setAsking(true);
+    // Deltas only start once the picker has chosen what to read, so the
+    // "reading the transcript" row genuinely covers that first stage.
+    const stream = openStream((delta) =>
+      setThread((t) => {
+        const last = t[t.length - 1];
+        if (!last || last.role !== "assistant" || !last.streaming) {
+          return [...t, { role: "assistant", content: delta, streaming: true }];
+        }
+        return [...t.slice(0, -1), { ...last, content: last.content + delta }];
+      }),
+    );
     try {
-      const res = await bridge("meetings.search", { query: question, history });
-      setThread((t) => [...t, { role: "assistant", content: res.answer, callIDs: res.callIDs }]);
+      const res = await bridge("meetings.search", { query: question, history, streamID: stream.id });
+      setThread((t) => {
+        const done: ChatItem = { role: "assistant", content: res.answer, callIDs: res.callIDs };
+        const last = t[t.length - 1];
+        return last?.streaming ? [...t.slice(0, -1), done] : [...t, done];
+      });
     } catch (e) {
-      setThread((t) => [
-        ...t,
-        { role: "assistant", content: e instanceof Error ? e.message : String(e), failed: true },
-      ]);
+      setThread((t) => {
+        const failed: ChatItem = {
+          role: "assistant",
+          content: e instanceof Error ? e.message : String(e),
+          failed: true,
+        };
+        const last = t[t.length - 1];
+        return last?.streaming ? [...t.slice(0, -1), failed] : [...t, failed];
+      });
     } finally {
+      stream.close();
       setAsking(false);
     }
   }
