@@ -1,5 +1,5 @@
 import * as React from "react";
-import { bridge } from "@/lib/bridge";
+import { bridge, openStream } from "@/lib/bridge";
 import { EmptyState } from "@/components/live";
 import type {
   DecisionStatus,
@@ -21,6 +21,7 @@ import {
 } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { AskBar, ChatThread, historyOf, type ChatItem } from "@/components/chat";
+import { Markdown } from "@/components/markdown";
 import { cn } from "@/lib/utils";
 import {
   Bell,
@@ -75,86 +76,6 @@ function followUpBadge(status: FollowUpStatus): { label: string; variant: BadgeP
     case "dismissed":
       return { label: "Dismissed", variant: "secondary" };
   }
-}
-
-// MARK: Minimal Markdown — mirrors Core/MarkdownNote.swift's block parser
-// (headings, 0/1-level bullets, plain text) plus a small **bold**/*italic*/
-// `code` inline pass. No markdown dependency is in package.json and this
-// page can't add one, but the consolidator's notes only ever use these.
-
-type MdBlock = { kind: "heading"; text: string } | { kind: "bullet"; text: string; level: number } | { kind: "text"; text: string };
-
-function parseMarkdownBlocks(markdown: string): MdBlock[] {
-  const blocks: MdBlock[] = [];
-  for (const raw of markdown.split("\n")) {
-    const line = raw.trim();
-    if (!line) continue;
-    const heading = ["### ", "## ", "# "].find((marker) => line.startsWith(marker));
-    if (heading) {
-      blocks.push({ kind: "heading", text: line.slice(heading.length) });
-      continue;
-    }
-    if (line.startsWith("- ") || line.startsWith("* ")) {
-      let indent = 0;
-      for (const ch of raw) {
-        if (ch === " ") indent += 1;
-        else if (ch === "\t") indent += 2;
-        else break;
-      }
-      blocks.push({ kind: "bullet", text: line.slice(2), level: Math.min(2, Math.floor(indent / 2)) });
-      continue;
-    }
-    blocks.push({ kind: "text", text: line });
-  }
-  return blocks;
-}
-
-function renderInline(text: string): React.ReactNode {
-  const parts = text.split(/(\*\*[^*]+\*\*|`[^`]+`|\*[^*]+\*)/g).filter((p) => p.length > 0);
-  return parts.map((part, i) => {
-    if (part.startsWith("**") && part.endsWith("**")) return <strong key={i}>{part.slice(2, -2)}</strong>;
-    if (part.startsWith("`") && part.endsWith("`")) {
-      return (
-        <code key={i} className="rounded bg-muted px-1 py-0.5 text-[12px]">
-          {part.slice(1, -1)}
-        </code>
-      );
-    }
-    if (part.startsWith("*") && part.endsWith("*")) return <em key={i}>{part.slice(1, -1)}</em>;
-    return <React.Fragment key={i}>{part}</React.Fragment>;
-  });
-}
-
-function MeetingNotes({ markdown }: { markdown: string }) {
-  const blocks = React.useMemo(() => parseMarkdownBlocks(markdown), [markdown]);
-  return (
-    <div className="flex flex-col gap-2" data-selectable>
-      {blocks.map((b, i) => {
-        if (b.kind === "heading") {
-          return (
-            <p key={i} className={cn("text-[15px] font-semibold", i > 0 && "mt-2")}>
-              {renderInline(b.text)}
-            </p>
-          );
-        }
-        if (b.kind === "bullet") {
-          return (
-            <div key={i} className="flex items-start gap-2" style={{ paddingLeft: b.level * 18 }}>
-              <span className={cn("mt-0.5 text-sm", b.level === 0 ? "text-primary" : "text-muted-foreground")}>
-                {b.level === 0 ? "•" : "◦"}
-              </span>
-              <p className="flex-1 text-[13.5px] leading-relaxed">{renderInline(b.text)}</p>
-            </div>
-          );
-        }
-        return (
-          <p key={i} className="text-[13.5px] leading-relaxed">
-            {renderInline(b.text)}
-          </p>
-        );
-      })}
-    </div>
-  );
 }
 
 // MARK: Small local dropdown/popover — no @radix-ui/react-dropdown-menu or
@@ -564,15 +485,36 @@ export function MeetingDetailPane({ callID, onDeleted }: { callID: string; onDel
     const history = historyOf(thread);
     setThread((t) => [...t, { role: "user", content: question }]);
     setAsking(true);
+    // The answer is appended to a placeholder turn as it is written; the
+    // bridge call still resolves with the whole thing, which replaces it.
+    const stream = openStream((delta) =>
+      setThread((t) => {
+        const last = t[t.length - 1];
+        if (!last || last.role !== "assistant" || !last.streaming) {
+          return [...t, { role: "assistant", content: delta, streaming: true }];
+        }
+        return [...t.slice(0, -1), { ...last, content: last.content + delta }];
+      }),
+    );
     try {
-      const res = await bridge("meetings.ask", { callID, question, history });
-      setThread((t) => [...t, { role: "assistant", content: res.answer }]);
+      const res = await bridge("meetings.ask", { callID, question, history, streamID: stream.id });
+      setThread((t) => {
+        const done: ChatItem = { role: "assistant", content: res.answer };
+        const last = t[t.length - 1];
+        return last?.streaming ? [...t.slice(0, -1), done] : [...t, done];
+      });
     } catch (e) {
-      setThread((t) => [
-        ...t,
-        { role: "assistant", content: e instanceof Error ? e.message : String(e), failed: true },
-      ]);
+      setThread((t) => {
+        const failed: ChatItem = {
+          role: "assistant",
+          content: e instanceof Error ? e.message : String(e),
+          failed: true,
+        };
+        const last = t[t.length - 1];
+        return last?.streaming ? [...t.slice(0, -1), failed] : [...t, failed];
+      });
     } finally {
+      stream.close();
       setAsking(false);
     }
   }
@@ -736,7 +678,7 @@ export function MeetingDetailPane({ callID, onDeleted }: { callID: string; onDel
         {pane === "summary" ? (
           <div className="mx-auto flex max-w-2xl flex-col gap-4 px-6 py-6">
             {resolvedNotes ? (
-              <MeetingNotes markdown={resolvedNotes} />
+              <Markdown markdown={resolvedNotes} />
             ) : detail.isConsolidating ? (
               <div className="flex items-center gap-2 text-muted-foreground">
                 <Loader2 className="size-3.5 animate-spin" />

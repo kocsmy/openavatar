@@ -1,4 +1,4 @@
-import { emitLocal } from "@/lib/bridge";
+import { emitLocal, emitStreamLocal } from "@/lib/bridge";
 import type {
   DecisionStatus,
   FollowUpStatus,
@@ -317,23 +317,30 @@ export const meetingsMocks: MockHandlers = {
   "meetings.ask": async (params) => {
     await delay(700);
     const m = findMeeting(params.callID);
-    return {
-      answer: m
-        ? `(mock answer) Nothing in “${m.title ?? "this call"}” addresses “${params.question}” directly.`
-        : "(mock answer) That meeting isn't in the library.",
-      callIDs: m ? [m.id] : [],
-    };
+    const answer = m
+      ? `**Mock answer** — nothing in “${m.title ?? "this call"}” addresses “${params.question}” directly. What it does cover:\n\n- The pricing experiment, briefly\n- Hiring for the design role\n2. A follow-up nobody owned`
+      : "(mock answer) That meeting isn't in the library.";
+    await typeOut(String(params.streamID ?? ""), answer);
+    return { answer, callIDs: m ? [m.id] : [] };
   },
   "meetings.search": async (params) => {
     await delay(900);
     const hits = meetings
       .filter((m) => `${m.title ?? ""} ${m.summary ?? ""}`.toLowerCase().includes(String(params.query ?? "").toLowerCase()))
       .slice(0, 3);
-    return {
-      answer: hits.length
-        ? `(mock answer) ${hits.length} meeting${hits.length > 1 ? "s" : ""} mention that.`
-        : "(mock answer) Nothing in the library covers that.",
-      callIDs: hits.map((m) => m.id),
-    };
+    const answer = hits.length
+      ? `**Mock answer** — ${hits.length} meeting${hits.length > 1 ? "s" : ""} mention that.`
+      : "(mock answer) Nothing in the library covers that.";
+    await typeOut(String(params.streamID ?? ""), answer);
+    return { answer, callIDs: hits.map((m) => m.id) };
   },
 };
+
+/** Imitates the host's token push so streaming is developable in a browser. */
+async function typeOut(streamID: string, answer: string) {
+  if (!streamID) return;
+  for (const word of answer.split(/(\s+)/)) {
+    emitStreamLocal(streamID, word);
+    await delay(18);
+  }
+}

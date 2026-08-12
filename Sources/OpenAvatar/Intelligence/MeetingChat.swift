@@ -46,7 +46,8 @@ final class MeetingChat {
 
     // MARK: One meeting
 
-    func ask(callID: UUID, question: String, history: [Turn] = []) async throws -> Answer {
+    func ask(callID: UUID, question: String, history: [Turn] = [],
+             onDelta: (@Sendable (String) -> Void)? = nil) async throws -> Answer {
         let trimmed = question.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return Answer(text: "") }
         guard let call = try store.listCalls().first(where: { $0.id == callID }) else {
@@ -68,14 +69,33 @@ final class MeetingChat {
             // The meeting is the same on every follow-up; only the question
             // changes, so the transcript should be read from cache.
             cachePrefix: true)
-        let response = try await router.complete(task: .summary, request)
-        return Answer(text: response.text.trimmingCharacters(in: .whitespacesAndNewlines),
-                      callIDs: [callID])
+        let text = try await run(request, onDelta: onDelta)
+        return Answer(text: text, callIDs: [callID])
+    }
+
+    /// Runs a request, forwarding text as it arrives when the caller wants it.
+    /// Falls back to a plain completion with no delta callback, so the
+    /// non-streaming callers (and providers without real SSE) are unchanged.
+    private func run(_ request: LLMRequest,
+                     onDelta: (@Sendable (String) -> Void)?) async throws -> String {
+        guard let onDelta else {
+            let response = try await router.complete(task: .summary, request)
+            return response.text.trimmingCharacters(in: .whitespacesAndNewlines)
+        }
+        var text = ""
+        for try await event in try await router.stream(task: .summary, request) {
+            if case .textDelta(let chunk) = event, !chunk.isEmpty {
+                text += chunk
+                onDelta(chunk)
+            }
+        }
+        return text.trimmingCharacters(in: .whitespacesAndNewlines)
     }
 
     // MARK: The whole library
 
-    func search(query: String, history: [Turn] = []) async throws -> Answer {
+    func search(query: String, history: [Turn] = [],
+                onDelta: (@Sendable (String) -> Void)? = nil) async throws -> Answer {
         let trimmed = query.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return Answer(text: "") }
         let calls = try store.listCalls()
@@ -102,8 +122,7 @@ final class MeetingChat {
                     read any full transcript.
                     """),
                 maxTokens: 1200)
-            return Answer(text: try await router.complete(task: .summary, request).text
-                .trimmingCharacters(in: .whitespacesAndNewlines))
+            return Answer(text: try await run(request, onDelta: onDelta))
         }
 
         var bodies: [String] = []
@@ -125,8 +144,7 @@ final class MeetingChat {
                 whenever you state something, so it can be checked.
                 """),
             maxTokens: 1600)
-        let response = try await router.complete(task: .summary, request)
-        return Answer(text: response.text.trimmingCharacters(in: .whitespacesAndNewlines),
+        return Answer(text: try await run(request, onDelta: onDelta),
                       callIDs: shortlist.map(\.id))
     }
 
