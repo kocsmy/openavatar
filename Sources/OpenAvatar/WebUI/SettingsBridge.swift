@@ -150,7 +150,7 @@ final class SettingsBridge {
         case "mode": settings.mode = AssistantMode(rawValue: value.stringValue ?? "") ?? settings.mode
         case "autoStartOnCall": settings.autoStartOnCall = value.boolValue ?? settings.autoStartOnCall
         case "meetingPromptEnabled": settings.meetingPromptEnabled = value.boolValue ?? settings.meetingPromptEnabled
-        case "confidenceThreshold": settings.confidenceThreshold = value.doubleValue ?? settings.confidenceThreshold
+        case "confidenceThreshold": settings.confidenceThreshold = value.numberValue ?? settings.confidenceThreshold
         case "transcriptionMode":
             settings.transcriptionMode = TranscriptionMode(rawValue: value.stringValue ?? "") ?? settings.transcriptionMode
         case "whisperCLIPath": settings.whisperCLIPath = value.stringValue ?? settings.whisperCLIPath
