@@ -19,20 +19,52 @@ struct MenuBarWebContent: View {
     }
 }
 
+/// The popover's web view outlives the popover.
+///
+/// SwiftUI is free to tear MenuBarExtra's content down when it closes, and
+/// rebuilding a WKWebView means reloading and re-rendering the page on every
+/// single open — the one surface where that delay is unmissable. One view,
+/// created once, kept alive; the height callback is re-pointed instead.
+@MainActor
+private enum MenuWebView {
+    static var view: WKWebView?
+    static var onHeight: ((CGFloat) -> Void)?
+
+    static func shared() -> WKWebView {
+        if let view { return view }
+        let created = WebHost.makeWebView(surface: "menu", transparent: true, onResize: { measured in
+            onHeight?(measured)
+        })
+        view = created
+        return created
+    }
+}
+
 private struct MenuBarWebView: NSViewRepresentable {
     @Binding var height: CGFloat
 
     func makeNSView(context: Context) -> WKWebView {
-        let binding = $height
-        return WebHost.makeWebView(surface: "menu", transparent: true, onResize: { measured in
-            // Never during a layout pass, and never taller than the screen.
-            DispatchQueue.main.async {
-                let limit = (NSScreen.main?.visibleFrame.height ?? 900) - 60
-                binding.wrappedValue = min(max(measured, 120), limit)
-            }
-        })
+        bindHeight()
+        return MenuWebView.shared()
     }
 
-    func updateNSView(_ nsView: WKWebView, context: Context) {}
+    func updateNSView(_ nsView: WKWebView, context: Context) {
+        // A rebuilt representable carries a fresh binding; the long-lived web
+        // view has to report into that one, not the one it launched with.
+        bindHeight()
+    }
+
+    private func bindHeight() {
+        let binding = $height
+        MenuWebView.onHeight = { measured in
+            // Never taller than the screen — content scrolls inside instead.
+            let limit = (NSScreen.main?.visibleFrame.height ?? 900) - 60
+            let clamped = min(max(measured, 120), limit)
+            // Not during a layout pass: this arrives mid-render from the page.
+            Task { @MainActor in
+                if abs(binding.wrappedValue - clamped) > 0.5 { binding.wrappedValue = clamped }
+            }
+        }
+    }
 }
 #endif
