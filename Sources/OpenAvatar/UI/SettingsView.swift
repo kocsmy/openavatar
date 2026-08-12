@@ -95,7 +95,7 @@ struct SettingsView: View {
             Divider()
             Button {
 #if canImport(WebKit)
-                WebSettingsWindowController.shared.show()
+                WebWindowController.shared.show(.settings)
 #endif
             } label: {
                 Label("Settings", systemImage: "gearshape")

@@ -15,9 +15,17 @@ struct OpenAvatarApp: App {
         // Menu-bar app. The icon is the recording indicator — it must always
         // reflect capture state (spec §5.1 hard requirement).
         MenuBarExtra {
+#if canImport(WebKit)
+            // The popover is web-rendered like the rest of the app; the native
+            // MenuBarView stays in the tree as the rollback path.
+            MenuBarWebContent()
+                .environmentObject(app)
+                .environmentObject(settings)
+#else
             MenuBarView()
                 .environmentObject(app)
                 .environmentObject(settings)
+#endif
         } label: {
             Image(systemName: app.isListening ? "waveform.circle.fill" : "waveform.circle")
         }
@@ -46,6 +54,15 @@ final class WindowManager {
     private var windows: [String: NSWindow] = [:]
 
     func showOnboarding() {
+#if canImport(WebKit)
+        WebWindowController.shared.show(.onboarding)
+#else
+        showNativeOnboarding()
+#endif
+    }
+
+    /// Rollback path: the SwiftUI onboarding, before the web rendering.
+    func showNativeOnboarding() {
         show(id: "onboarding", title: "Welcome",
              size: NSSize(width: 720, height: 560)) {
             OnboardingView()
@@ -130,7 +147,16 @@ final class WindowManager {
     /// The main app window (Home, Meetings, Settings…). Hosted here as a
     /// plain NSWindow instead of SwiftUI's `Settings` scene, whose window
     /// ignores content flexibility and could never be resized.
-    func showMain() {
+    func showMain(section: String? = nil) {
+#if canImport(WebKit)
+        WebWindowController.shared.show(.main, section: section)
+#else
+        showNativeMain()
+#endif
+    }
+
+    /// Rollback path: the SwiftUI main window (Home, Meetings, Follow-ups).
+    func showNativeMain() {
         show(id: "main", title: "OpenAvatar",
              size: NSSize(width: 1080, height: 720),
              minSize: NSSize(width: 960, height: 660)) {
@@ -143,6 +169,15 @@ final class WindowManager {
     /// The per-call notes + live transcript window. With focus: false it
     /// appears behind the active app (the call) instead of stealing focus.
     func showCallWindow(focus: Bool = true) {
+#if canImport(WebKit)
+        WebWindowController.shared.show(.call, focus: focus)
+#else
+        showNativeCallWindow(focus: focus)
+#endif
+    }
+
+    /// Rollback path: the SwiftUI call notes window.
+    func showNativeCallWindow(focus: Bool = true) {
         show(id: "call", title: "Call notes",
              size: NSSize(width: 700, height: 620), focus: focus) {
             CallNotesWindowView()

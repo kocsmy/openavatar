@@ -361,7 +361,7 @@ struct MenuBarView: View {
     /// there; the main window keeps Home and the Library.
     private func openWebSettings() {
 #if canImport(WebKit) && canImport(AppKit)
-        WebSettingsWindowController.shared.show()
+        WebWindowController.shared.show(.settings)
 #endif
     }
 
