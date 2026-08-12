@@ -151,8 +151,31 @@ jobs:
             NOTES="First install: download the DMG, drag to Applications, run \`xattr -cr /Applications/OpenAvatar.app\` before first launch (ad-hoc signed, not notarized). Already installed? The app updates itself in the background and asks to relaunch. The zip + appcast.xml assets are the auto-update feed."
           fi
 
+          # Publish as a draft first. SUFeedURL points at
+          # releases/latest/download/appcast.xml, and GitHub moves "latest" the
+          # instant a release exists — so creating it published would leave the
+          # feed 404ing until the assets finished uploading, and every app
+          # checking for updates in that window got "An error occurred in
+          # retrieving update information". A draft is invisible to "latest",
+          # so the feed only ever moves to a release that is already complete.
           gh release create "${TAG}" build/OpenAvatar.dmg build/OpenAvatar.zip build/appcast.xml \
             --repo "${GITHUB_REPOSITORY}" \
             --target "${GITHUB_SHA}" \
             --title "OpenAvatar ${TAG}" \
-            --notes "${NOTES}"
+            --notes "${NOTES}" \
+            --draft
+
+          gh release edit "${TAG}" --repo "${GITHUB_REPOSITORY}" --draft=false --latest
+
+          # The feed is what users actually hit; assert it serves this version
+          # before calling the release done.
+          FEED="https://github.com/${GITHUB_REPOSITORY}/releases/latest/download/appcast.xml"
+          for attempt in $(seq 1 10); do
+            if curl -fsSL "${FEED}" | grep -q "<sparkle:shortVersionString>${TAG#v}<"; then
+              echo "✓ appcast serves ${TAG}"; break
+            fi
+            if [ "${attempt}" = "10" ]; then
+              echo "::error::${FEED} is not serving ${TAG}"; exit 1
+            fi
+            sleep 6
+          done

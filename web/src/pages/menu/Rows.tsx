@@ -1,18 +1,20 @@
 import { cn } from "@/lib/utils";
 import type { AssistantMode } from "@/lib/types";
-import { AppWindow, NotebookText, Power, Settings } from "lucide-react";
+import { AppWindow, Power, Settings } from "lucide-react";
 import { GhostRow } from "./common";
 
-/** Mirrors MenuBarView.menuRows: Granola-style quick rows between content and the mode footer. */
+/**
+ * Mirrors MenuBarView.menuRows: Granola-style quick rows between content and
+ * the mode footer. There is no separate row for call notes — they live inside
+ * the main window now, so "Open OpenAvatar" already goes there.
+ */
 export function MenuRows({
   version,
   onOpenMain,
-  onOpenCall,
   onCheckUpdates,
 }: {
   version: string;
   onOpenMain: () => void;
-  onOpenCall: () => void;
   onCheckUpdates: () => void;
 }) {
   return (
@@ -20,10 +22,6 @@ export function MenuRows({
       <GhostRow onClick={onOpenMain}>
         <AppWindow className="mr-2 size-4 shrink-0 text-muted-foreground" />
         <span className="text-[13px]">Open OpenAvatar</span>
-      </GhostRow>
-      <GhostRow onClick={onOpenCall}>
-        <NotebookText className="mr-2 size-4 shrink-0 text-muted-foreground" />
-        <span className="text-[13px]">Call notes &amp; transcript</span>
       </GhostRow>
       <div className="flex items-center gap-2 px-2 pt-1">
         <span className="text-[10.5px] text-muted-foreground/60">v{version}</span>

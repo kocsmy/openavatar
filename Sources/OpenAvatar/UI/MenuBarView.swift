@@ -292,12 +292,9 @@ struct MenuBarView: View {
     /// Granola-style quick rows between content and the mode footer.
     private var menuRows: some View {
         VStack(alignment: .leading, spacing: 2) {
+            // No separate call-notes row: they live inside the main window
+            // now, so this one row already goes there.
             menuRow("Open OpenAvatar", icon: "macwindow") { openSettingsAndFocus() }
-            menuRow("Call notes & transcript", icon: "note.text") {
-#if canImport(AppKit)
-                WindowManager.shared.showCallNotes()
-#endif
-            }
             HStack(spacing: 8) {
                 Text("v\(UpdateManager.shared.currentVersion)")
                     .font(.caption2).foregroundStyle(.tertiary)
