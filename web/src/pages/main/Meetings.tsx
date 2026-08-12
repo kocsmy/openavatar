@@ -16,6 +16,7 @@ import { AskBar, ChatThread, historyOf, type ChatItem } from "@/components/chat"
 import { cn } from "@/lib/utils";
 import { CalendarDays, ChevronRight, RefreshCw, Search, Trash2 } from "lucide-react";
 import { MeetingDetailPane } from "./MeetingDetail";
+import { LiveCallPane, LiveCallRow } from "./LiveCall";
 
 /*
  * Ports of TranscriptViews.swift's TranscriptFormatter / MeetingFormat: pure
@@ -109,8 +110,12 @@ function dayKey(iso: string): string {
  * MeetingsTab this never replaces itself with MeetingDetailView — it just
  * fills the right pane.
  */
+/** Selection sentinel for the pinned live row — deliberately not a call id. */
+const LIVE_ID = "__live__";
+
 export function MeetingsPage() {
   const { data, loading, reload } = useLive("meetings.list", {}, { topics: ["state", "meetings"] });
+  const { data: callState } = useLive("call.state", {}, { topics: ["state"] });
   const [query, setQuery] = React.useState("");
   const [selectedID, setSelectedID] = React.useState<string | null>(null);
   const [pendingDelete, setPendingDelete] = React.useState<MeetingSummary | null>(null);
@@ -131,12 +136,51 @@ export function MeetingsPage() {
     );
   }, [meetings, query]);
 
+  /*
+   * What's happening right now: a call in progress, or an upcoming meeting
+   * opened to write notes ahead of time. Both used to be a separate window;
+   * here they're a pinned row above the history, because a live call is just
+   * the newest meeting in it. Mode "ended" is deliberately not live — that
+   * call has a real row of its own by then.
+   */
+  const live = callState && callState.mode !== "ended" ? callState : null;
+  const liveTargetID = live?.targetId ?? null;
+  const endedCallID = callState?.mode === "ended" ? (callState.ended?.callID ?? null) : null;
+
   // Open on the newest meeting, the way a mail client does. The native list
   // pushed to a detail view and had nothing to show until you picked one;
   // side by side, an empty half-window is just wasted space.
   React.useEffect(() => {
     if (selectedID === null && meetings.length > 0) setSelectedID(meetings[0].id);
   }, [meetings, selectedID]);
+
+  /*
+   * Follow the call. The window shows itself when one starts, so it should
+   * land on the call rather than on whatever was last read — but only once
+   * per call, or a mid-call refetch would yank the view back every few
+   * hundred milliseconds while someone is reading an old meeting.
+   */
+  const followed = React.useRef<string | null>(null);
+  React.useEffect(() => {
+    if (!liveTargetID || followed.current === liveTargetID) return;
+    followed.current = liveTargetID;
+    setSelectedID(LIVE_ID);
+  }, [liveTargetID]);
+
+  // The handover, which used to be a window swapping its own contents: once
+  // the call ends, move to its finished page — unless the user has already
+  // navigated somewhere else themselves.
+  React.useEffect(() => {
+    if (!endedCallID) return;
+    setSelectedID((cur) => (cur === null || cur === LIVE_ID ? endedCallID : cur));
+  }, [endedCallID]);
+
+  // A preview that got dismissed without becoming a call leaves the pinned
+  // row selected but gone; fall back to the newest meeting.
+  const isLive = live !== null;
+  React.useEffect(() => {
+    if (selectedID === LIVE_ID && !isLive && !endedCallID) setSelectedID(null);
+  }, [selectedID, isLive, endedCallID]);
 
   const groups = React.useMemo(() => {
     const byDay = new Map<string, { day: Date; items: MeetingSummary[] }>();
@@ -219,6 +263,19 @@ export function MeetingsPage() {
         </div>
 
         <div className="min-h-0 flex-1 overflow-y-auto">
+          {live ? (
+            <div className="flex flex-col gap-0.5 px-2.5 pt-2.5">
+              <div className="px-1.5 pb-1 text-[11px] font-semibold uppercase tracking-wider text-muted-foreground/70">
+                {live.mode === "event" ? "Up next" : "Now"}
+              </div>
+              <LiveCallRow
+                state={live}
+                selected={selectedID === LIVE_ID}
+                onSelect={() => setSelectedID(LIVE_ID)}
+              />
+            </div>
+          ) : null}
+
           {!loading && meetings.length === 0 ? (
             <EmptyState
               icon={CalendarDays}
@@ -263,7 +320,9 @@ export function MeetingsPage() {
               setThread([]);
             }}
           />
-        ) : selectedID ? (
+        ) : selectedID === LIVE_ID && live ? (
+          <LiveCallPane state={live} />
+        ) : selectedID && selectedID !== LIVE_ID ? (
           // Rendered directly, not inside a scroller: the detail pane manages
           // its own scrolling so its ask composer can stay pinned at the
           // bottom, which needs a bounded height here.

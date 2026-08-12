@@ -5,7 +5,7 @@ import { Textarea } from "@/components/ui/textarea";
 /**
  * The user's own scratchpad — autosaved onto the call record (or, pre-call,
  * the event) and included in exports next to the AI-written meeting notes.
- * Debounced save mirrors CallNotesWindowView.scheduleSave (a 700ms pause).
+ * Saves on a 700ms pause, so there is no Save button to forget.
  *
  * `targetId` names whatever `initialText` belongs to (event id or call id).
  * The draft only reloads from the server when that identity changes — a live

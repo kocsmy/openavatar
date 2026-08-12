@@ -9,11 +9,11 @@ import AppKit
 /// bridge. The TypeScript half of this contract lives in
 /// web/src/lib/types/call.ts.
 ///
-/// Once a call ends, this window hands over to the meeting detail — the same
-/// takeover CallNotesWindowView did, since that review is where the detected
-/// actions get approved. The page renders the Meetings surface's own detail
-/// component against `ended.callID`, so the review exists in exactly one
-/// place and this bridge never reimplements it.
+/// These feed the pinned row at the top of the Meetings list — the live call
+/// is the newest meeting in the library, so it is shown there rather than in
+/// a window of its own. `mode` reports which face to draw: an upcoming
+/// meeting's notes pad, the call in progress, or `ended` once it stops, at
+/// which point Meetings selects that call's own page and this bridge is done.
 @MainActor
 final class CallBridge {
     private let app = AppState.shared
@@ -35,9 +35,9 @@ final class CallBridge {
 
     // MARK: State
 
-    /// Mirrors CallNotesWindowView's own mode computation: an event preview
-    /// only holds while no call is running, and an ended call only takes over
-    /// once listening has stopped and no preview claimed the window first.
+    /// An event preview only holds while no call is running, and an ended
+    /// call is only reported once listening has stopped and no preview
+    /// claimed the pane first.
     private func state() -> JSONValue {
         let previewEvent = app.isListening ? nil : app.previewEvent
 
@@ -72,8 +72,7 @@ final class CallBridge {
         ])
     }
 
-    /// The just-ended call's record, once present — same lookup as
-    /// CallNotesWindowView.refreshEndedCall.
+    /// The just-ended call's record, once present.
     private func endedRecord() -> ContextStore.CallRecord? {
         guard !app.isListening, let callID = app.currentCallID else { return nil }
         return (try? app.store.listCalls(limit: 200))?.first { $0.id == callID }
@@ -114,8 +113,8 @@ final class CallBridge {
 
     // MARK: Notes autosave
 
-    /// Same target resolution as CallNotesWindowView.scheduleSave: the preview
-    /// event wins while no call is running, otherwise the live/just-ended call.
+    /// The preview event wins while no call is running, otherwise the notes
+    /// belong to the live (or just-ended) call.
     private func saveNotes(_ params: JSONValue) throws -> JSONValue {
         guard let text = params["text"]?.stringValue else {
             throw AppError.parsing("call.saveNotes needs text")

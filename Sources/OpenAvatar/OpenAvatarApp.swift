@@ -147,40 +147,29 @@ final class WindowManager {
     /// The main app window (Home, Meetings, Settings…). Hosted here as a
     /// plain NSWindow instead of SwiftUI's `Settings` scene, whose window
     /// ignores content flexibility and could never be resized.
-    func showMain(section: String? = nil) {
+    ///
+    /// `focus: false` orders it in behind the active app — how the call notes
+    /// appear when a call starts, without pulling attention off the call.
+    func showMain(section: String? = nil, focus: Bool = true) {
 #if canImport(WebKit)
-        WebWindowController.shared.show(.main, section: section)
+        WebWindowController.shared.show(.main, section: section, focus: focus)
 #else
-        showNativeMain()
+        showNativeMain(focus: focus)
 #endif
+    }
+
+    /// The live call's notes and transcript, which live at the top of the
+    /// Meetings list rather than in a window of their own.
+    func showCallNotes(focus: Bool = true) {
+        showMain(section: "meetings", focus: focus)
     }
 
     /// Rollback path: the SwiftUI main window (Home, Meetings, Follow-ups).
-    func showNativeMain() {
+    func showNativeMain(focus: Bool = true) {
         show(id: "main", title: "OpenAvatar",
              size: NSSize(width: 1080, height: 720),
-             minSize: NSSize(width: 960, height: 660)) {
+             minSize: NSSize(width: 960, height: 660), focus: focus) {
             SettingsView()
-                .environmentObject(AppState.shared)
-                .environmentObject(SettingsStore.shared)
-        }
-    }
-
-    /// The per-call notes + live transcript window. With focus: false it
-    /// appears behind the active app (the call) instead of stealing focus.
-    func showCallWindow(focus: Bool = true) {
-#if canImport(WebKit)
-        WebWindowController.shared.show(.call, focus: focus)
-#else
-        showNativeCallWindow(focus: focus)
-#endif
-    }
-
-    /// Rollback path: the SwiftUI call notes window.
-    func showNativeCallWindow(focus: Bool = true) {
-        show(id: "call", title: "Call notes",
-             size: NSSize(width: 700, height: 620), focus: focus) {
-            CallNotesWindowView()
                 .environmentObject(AppState.shared)
                 .environmentObject(SettingsStore.shared)
         }

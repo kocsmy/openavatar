@@ -62,6 +62,17 @@ jobs:
           cache: npm
           cache-dependency-path: web/package-lock.json
 
+      # Tailwind v4 scans for class names and skips anything git-ignores, so a
+      # careless ignore pattern silently drops that file's utilities from the
+      # CSS — the build stays green and the window renders wrong. A tracked
+      # source file that is also ignored is always that mistake.
+      - name: No tracked source is git-ignored
+        run: |
+          ignored=$(git ls-files web/src Sources | git check-ignore --stdin || true)
+          if [ -n "$ignored" ]; then
+            echo "::error::these tracked files are git-ignored:"; echo "$ignored"; exit 1
+          fi
+
       - name: Build web settings UI
         run: npm ci --no-audit --no-fund && npm run build
         working-directory: web

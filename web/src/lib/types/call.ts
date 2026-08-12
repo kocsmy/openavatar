@@ -1,9 +1,9 @@
 /** Call surface bridge contract. Mirrors Sources/OpenAvatar/WebUI/Bridges/CallBridge.swift. */
 
 /**
- * Which face the window shows, mirroring CallNotesWindowView's own branching:
- * an upcoming meeting's notes pad, the live call, or (once stopped) a
- * lightweight "call ended" handoff — the full review lives in Meetings.
+ * Which face the pinned Meetings row shows: an upcoming meeting's notes pad,
+ * the live call, or (once stopped) a handoff — at which point Meetings
+ * selects that call's own page and the row goes away.
  */
 export type CallWindowMode = "event" | "live" | "ended";
 

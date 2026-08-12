@@ -454,14 +454,7 @@ struct MeetingDetailView: View {
                             isPresented: $confirmingDelete) {
             Button("Delete meeting", role: .destructive) {
                 app.deleteMeeting(call.id)
-                if showsBack {
-                    onBack()
-                } else {
-#if canImport(AppKit)
-                    // Post-call window: the page IS the window — close it.
-                    WindowManager.shared.close(id: "call")
-#endif
-                }
+                onBack()
             }
         } message: {
             Text("The transcript, notes, and detected actions are removed. This can't be undone.")

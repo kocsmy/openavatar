@@ -1,70 +1,47 @@
 import * as React from "react";
 import { bridge } from "@/lib/bridge";
-import { useLive } from "@/components/live";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
-import { MeetingDetailPane } from "@/pages/main/MeetingDetail";
 import { NotesPane } from "@/pages/call/NotesPane";
 import { TranscriptPane } from "@/pages/call/Transcript";
-import type { CallPreviewEvent } from "@/lib/types/call";
+import type { CallPreviewEvent, CallStateResult } from "@/lib/types/call";
 import { AudioWaveform, Calendar as CalendarIcon, Check } from "lucide-react";
 
 type Pane = "notes" | "transcript";
 
 /**
- * The per-call window (Granola-style): pops up in the background when a call
- * starts. "My notes" is the user's own scratchpad, autosaved onto the call
- * record; "Transcript" is the live feed. Before a call, the same window shows
- * an upcoming meeting instead — its details plus a notes pad seeded from (and
- * carried into) the call once it starts.
+ * The call as it happens, inside Meetings rather than in a window of its own.
  *
- * Port of CallNotesWindowView, including its post-call takeover: once the
- * call ends the window becomes the meeting detail, reusing the Meetings
- * surface's own pane so the review lives in one place.
+ * This used to be a separate "Call notes" window that popped up beside the
+ * call and then handed itself over to the meeting page once the call ended —
+ * two windows showing the same meeting at different points in its life. The
+ * live call is just the newest entry in the library, so it belongs at the top
+ * of the same list, and the handover is now simply the row ceasing to be live.
+ *
+ * Before a call, the same pane shows an upcoming meeting instead: its details
+ * plus a notes pad that carries into the call once it starts.
  */
-export default function CallSurface() {
-  const { data } = useLive("call.state", {}, { topics: ["state"] });
+export function LiveCallPane({ state }: { state: CallStateResult }) {
   const [pane, setPane] = React.useState<Pane>("notes");
-
-  if (!data) return null;
-
-  // Native handed the whole window over to the meeting detail once a call
-  // ended — that review is where the detected actions get approved, so it
-  // stays one window rather than becoming a trip to another one.
-  if (data.mode === "ended" && data.ended) {
-    return (
-      <MeetingDetailPane
-        callID={data.ended.callID}
-        onDeleted={() => void bridge("window.close", {})}
-      />
-    );
-  }
-
-  const isPreview = data.mode === "event";
+  const isPreview = state.mode === "event";
 
   return (
-    <div className="flex h-screen flex-col overflow-hidden">
-      <div className="px-4 py-3">
-        {isPreview && data.event ? (
-          <EventHeader event={data.event} autoStartOnCall={data.autoStartOnCall} />
+    <div className="flex h-full min-h-0 flex-col">
+      <div className="flex flex-col gap-3 border-b border-border px-6 py-4">
+        {isPreview && state.event ? (
+          <EventHeader event={state.event} autoStartOnCall={state.autoStartOnCall} />
         ) : (
-          <CallHeader isListening={data.isListening} assistantName={data.assistantName} />
+          <CallHeader isListening={state.isListening} assistantName={state.assistantName} />
         )}
+        {!isPreview ? <PanePicker pane={pane} onChange={setPane} /> : null}
       </div>
-      <div className="border-b border-border" />
-
-      {!isPreview ? (
-        <div className="px-4 py-2.5">
-          <PanePicker pane={pane} onChange={setPane} />
-        </div>
-      ) : null}
 
       <div className="min-h-0 flex-1">
         {isPreview || pane === "notes" ? (
           <NotesPane
-            targetId={data.targetId}
-            initialText={data.notes}
+            targetId={state.targetId}
+            initialText={state.notes}
             placeholder={
               isPreview
                 ? "Write your notes for this meeting ahead of time — saved automatically."
@@ -72,9 +49,59 @@ export default function CallSurface() {
             }
           />
         ) : (
-          <TranscriptPane isListening={data.isListening} />
+          <TranscriptPane isListening={state.isListening} />
         )}
       </div>
+    </div>
+  );
+}
+
+/** The list row for whatever is happening now — pinned above the history. */
+export function LiveCallRow({
+  state,
+  selected,
+  onSelect,
+}: {
+  state: CallStateResult;
+  selected: boolean;
+  onSelect: () => void;
+}) {
+  const isPreview = state.mode === "event";
+  const title = isPreview ? (state.event?.title ?? "Upcoming meeting") : "Current call";
+  const detail = isPreview
+    ? (state.event?.participantSummary ?? "Write your notes before it starts")
+    : state.isListening
+      ? `${state.assistantName} is taking notes`
+      : "Not listening yet";
+
+  return (
+    <div
+      role="button"
+      tabIndex={0}
+      onClick={onSelect}
+      onKeyDown={(e) => e.key === "Enter" && onSelect()}
+      className={cn(
+        "flex cursor-default items-center gap-2 rounded-md px-2.5 py-2 text-left transition-colors",
+        selected ? "bg-primary/10" : "hover:bg-accent/60",
+      )}
+    >
+      {state.isListening ? (
+        <span className="relative flex size-2 shrink-0">
+          <span className="absolute inline-flex size-full animate-ping rounded-full bg-destructive opacity-70" />
+          <span className="relative inline-flex size-2 rounded-full bg-destructive" />
+        </span>
+      ) : (
+        <CalendarIcon className="size-3.5 shrink-0 text-muted-foreground" />
+      )}
+      <div className="min-w-0 flex-1">
+        <p className="truncate text-[13px] font-medium">{title}</p>
+        <p className="truncate text-xs text-muted-foreground">{detail}</p>
+      </div>
+      {isPreview && state.event?.conferenceService ? (
+        <Badge variant="outline" className="shrink-0">
+          {state.event.conferenceService}
+        </Badge>
+      ) : null}
     </div>
   );
 }
@@ -105,7 +132,7 @@ function CallHeader({ isListening, assistantName }: { isListening: boolean; assi
     <div className="flex items-center gap-3">
       <IconPlate icon={isListening ? AudioWaveform : Check} tone={isListening ? "destructive" : "success"} />
       <div className="min-w-0 flex-1">
-        <p className="text-[13px] font-semibold">{isListening ? "Transcribing this call" : "Call ended"}</p>
+        <p className="text-[15px] font-semibold">{isListening ? "Transcribing this call" : "Call ended"}</p>
         <p className="text-xs text-muted-foreground">
           {isListening
             ? `${assistantName} is taking notes — write your own alongside.`
@@ -128,7 +155,7 @@ function EventHeader({ event, autoStartOnCall }: { event: CallPreviewEvent; auto
       <IconPlate icon={CalendarIcon} tone="brand" />
       <div className="min-w-0 flex-1">
         <div className="flex items-center gap-1.5">
-          <p className="truncate text-[13px] font-semibold">{event.title}</p>
+          <p className="truncate text-[15px] font-semibold">{event.title}</p>
           {event.conferenceService ? <Badge variant="outline">{event.conferenceService}</Badge> : null}
         </div>
         {meta ? <p className="text-xs text-muted-foreground">{meta}</p> : null}
@@ -148,15 +175,15 @@ function PanePicker({ pane, onChange }: { pane: Pane; onChange: (p: Pane) => voi
     { id: "transcript", label: "Transcript" },
   ];
   return (
-    <div className="inline-flex rounded-md bg-muted p-0.5">
+    <div className="inline-flex w-fit rounded-md border border-border p-0.5">
       {options.map((o) => (
         <button
           key={o.id}
           type="button"
           onClick={() => onChange(o.id)}
           className={cn(
-            "rounded-[5px] px-3 py-1 text-xs font-medium transition-colors",
-            pane === o.id ? "bg-card text-foreground shadow-sm" : "text-muted-foreground hover:text-foreground",
+            "rounded px-3 py-1 text-[13px] transition-colors",
+            pane === o.id ? "bg-primary text-primary-foreground" : "text-muted-foreground hover:text-foreground",
           )}
         >
           {o.label}

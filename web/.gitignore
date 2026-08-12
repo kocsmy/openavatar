@@ -1,6 +1,9 @@
 node_modules/
 dist/
 
-# Local screenshot output (screenshot.mjs writes here)
-shots/
-main/
+# Local screenshot output (screenshot.mjs writes here). Anchored with a
+# leading slash on purpose: a bare "main/" also matches src/pages/main/, and
+# Tailwind's scanner skips gitignored paths — which silently dropped every
+# class those pages alone used (w-80 among them) from the built CSS.
+/shots/
+/main/
