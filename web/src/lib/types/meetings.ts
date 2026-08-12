@@ -72,6 +72,18 @@ export interface MeetingDetail {
   followUps: MeetingFollowUp[];
 }
 
+/** One exchange in an "ask" thread. Only user/assistant cross the bridge. */
+export interface ChatTurn {
+  role: "user" | "assistant";
+  content: string;
+}
+
+export interface ChatAnswer {
+  answer: string;
+  /** Meetings the answer drew on, for citation chips. */
+  callIDs: string[];
+}
+
 export interface MeetingsAPI {
   "meetings.list": [Record<string, never>, { meetings: MeetingSummary[] }];
   "meetings.detail": [{ callID: string }, MeetingDetail];
@@ -90,4 +102,9 @@ export interface MeetingsAPI {
   "meetings.dismissFollowUp": [{ callID: string; followUpID: string }, Record<string, never>];
   "meetings.copyTranscript": [{ callID: string }, { message: string }];
   "meetings.exportMarkdown": [{ callID: string }, { message: string }];
+  "meetings.saveUserNotes": [{ callID: string; notes: string }, Record<string, never>];
+  /** Follow-up question about one meeting. */
+  "meetings.ask": [{ callID: string; question: string; history: ChatTurn[] }, ChatAnswer];
+  /** Question across the whole library — the model picks which calls to read. */
+  "meetings.search": [{ query: string; history: ChatTurn[] }, ChatAnswer];
 }

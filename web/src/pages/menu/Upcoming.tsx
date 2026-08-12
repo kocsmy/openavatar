@@ -31,10 +31,14 @@ function UpcomingRow({ event, onOpen }: { event: MenuEvent; onOpen: () => void }
   return (
     <GhostRow onClick={onOpen} title="Open this meeting's notes — write yours before the call starts">
       <div className="flex w-full items-center gap-2.5">
-        <div className="w-14 shrink-0 leading-tight">
+        {/* Wide enough for "11:30 AM" on one line — at w-14 the two-digit
+            hours wrapped and pushed the day label out of alignment. */}
+        <div className="w-[4.75rem] shrink-0 leading-tight">
           {event.startISO ? (
             <>
-              <div className="text-[12px] font-semibold tabular-nums">{formatTime(event.startISO)}</div>
+              <div className="whitespace-nowrap text-[12px] font-semibold tabular-nums">
+                {formatTime(event.startISO)}
+              </div>
               <div className="text-[10.5px] text-muted-foreground/70">{isToday ? "Today" : "Tomorrow"}</div>
             </>
           ) : null}

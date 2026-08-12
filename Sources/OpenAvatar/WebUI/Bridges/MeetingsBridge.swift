@@ -35,9 +35,14 @@ final class MeetingsBridge {
         case "meetings.dismissFollowUp": return try dismissFollowUpAction(params)
         case "meetings.copyTranscript": return try copyTranscript(params)
         case "meetings.exportMarkdown": return try exportMarkdown(params)
+        case "meetings.saveUserNotes": return try saveUserNotes(params)
+        case "meetings.ask": return try await ask(params)
+        case "meetings.search": return try await search(params)
         default: return nil
         }
     }
+
+    private lazy var chat = MeetingChat(router: app.router, store: app.store)
 
     // MARK: List
 
@@ -192,6 +197,52 @@ final class MeetingsBridge {
         let folded = app.sweepStrayVoices()
         if folded > 0 { WebEventBus.shared.emit(.meetings) }
         return .object(["foldedCount": .number(Double(folded))])
+    }
+
+    /// The user's own notes, editable from the meeting page rather than only
+    /// in the call window — a meeting you wrote notes for is exactly the one
+    /// you want to add to afterwards.
+    private func saveUserNotes(_ params: JSONValue) throws -> JSONValue {
+        let call = try requireCall(params)
+        try app.store.updateCallUserNotes(call.id, text: params["notes"]?.stringValue ?? "")
+        WebEventBus.shared.emit(.meetings)
+        return .object([:])
+    }
+
+    // MARK: Asking
+
+    private func ask(_ params: JSONValue) async throws -> JSONValue {
+        let call = try requireCall(params)
+        let answer = try await chat.ask(
+            callID: call.id,
+            question: params["question"]?.stringValue ?? "",
+            history: Self.turns(params["history"]))
+        return Self.encodeAnswer(answer)
+    }
+
+    private func search(_ params: JSONValue) async throws -> JSONValue {
+        let answer = try await chat.search(query: params["query"]?.stringValue ?? "",
+                                           history: Self.turns(params["history"]))
+        return Self.encodeAnswer(answer)
+    }
+
+    private static func encodeAnswer(_ answer: MeetingChat.Answer) -> JSONValue {
+        .object([
+            "answer": .string(answer.text),
+            "callIDs": .array(answer.callIDs.map { .string($0.uuidString) })
+        ])
+    }
+
+    /// Prior turns, as the page has them. Anything that isn't a plain
+    /// user/assistant exchange is dropped rather than trusted.
+    private static func turns(_ value: JSONValue?) -> [MeetingChat.Turn] {
+        (value?.arrayValue ?? []).compactMap { item in
+            guard let content = item["content"]?.stringValue, !content.isEmpty,
+                  let raw = item["role"]?.stringValue,
+                  raw == "user" || raw == "assistant",
+                  let role = ChatRole(rawValue: raw) else { return nil }
+            return MeetingChat.Turn(role: role, content: content)
+        }
     }
 
     // MARK: Decisions & follow-ups

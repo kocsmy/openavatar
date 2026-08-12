@@ -12,6 +12,7 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
+import { AskBar, ChatThread, historyOf, type ChatItem } from "@/components/chat";
 import { cn } from "@/lib/utils";
 import { CalendarDays, ChevronRight, RefreshCw, Search, Trash2 } from "lucide-react";
 import { MeetingDetailPane } from "./MeetingDetail";
@@ -114,6 +115,8 @@ export function MeetingsPage() {
   const [selectedID, setSelectedID] = React.useState<string | null>(null);
   const [pendingDelete, setPendingDelete] = React.useState<MeetingSummary | null>(null);
   const [deleting, setDeleting] = React.useState(false);
+  const [thread, setThread] = React.useState<ChatItem[]>([]);
+  const [asking, setAsking] = React.useState(false);
 
   const meetings = React.useMemo(
     () => (data?.meetings ?? []).slice().sort((a, b) => new Date(b.startedAt).getTime() - new Date(a.startedAt).getTime()),
@@ -146,6 +149,30 @@ export function MeetingsPage() {
     return [...byDay.entries()].sort((a, b) => b[1].day.getTime() - a[1].day.getTime());
   }, [filtered]);
 
+  /**
+   * The same box does both jobs. Typing filters the list on the spot, which is
+   * what you want when you half-remember a title; pressing Enter hands the
+   * question to the model, which decides which calls to actually read. One
+   * input, because "search" and "ask" are the same intent at different levels
+   * of precision.
+   */
+  async function askLibrary(question: string) {
+    const history = historyOf(thread);
+    setThread((t) => [...t, { role: "user", content: question }]);
+    setAsking(true);
+    try {
+      const res = await bridge("meetings.search", { query: question, history });
+      setThread((t) => [...t, { role: "assistant", content: res.answer, callIDs: res.callIDs }]);
+    } catch (e) {
+      setThread((t) => [
+        ...t,
+        { role: "assistant", content: e instanceof Error ? e.message : String(e), failed: true },
+      ]);
+    } finally {
+      setAsking(false);
+    }
+  }
+
   async function confirmDelete() {
     if (!pendingDelete) return;
     setDeleting(true);
@@ -168,16 +195,27 @@ export function MeetingsPage() {
           </Button>
         </Toolbar>
 
-        <div className="border-b border-border p-2.5">
+        <div className="flex flex-col gap-1 border-b border-border p-2.5">
           <div className="relative">
             <Search className="pointer-events-none absolute left-2.5 top-1/2 size-3.5 -translate-y-1/2 text-muted-foreground" />
             <Input
               value={query}
               onChange={(e) => setQuery(e.target.value)}
-              placeholder="Search meetings…"
+              onKeyDown={(e) => {
+                if (e.key !== "Enter" || !query.trim() || asking) return;
+                e.preventDefault();
+                void askLibrary(query.trim());
+                setQuery("");
+              }}
+              placeholder="Search meetings, or ask a question…"
               className="pl-8"
             />
           </div>
+          {query.trim() ? (
+            <p className="px-1 text-[11px] text-muted-foreground">
+              <kbd className="rounded border border-border px-1 font-sans">↵</kbd> to ask across all meetings
+            </p>
+          ) : null}
         </div>
 
         <div className="min-h-0 flex-1 overflow-y-auto">
@@ -212,8 +250,23 @@ export function MeetingsPage() {
         </div>
       </div>
 
-      <div className="min-h-0 flex-1 overflow-y-auto">
-        {selectedID ? (
+      <div className="min-h-0 flex-1 overflow-hidden">
+        {thread.length > 0 || asking ? (
+          <LibraryAnswer
+            thread={thread}
+            asking={asking}
+            meetings={meetings}
+            onAsk={(q) => void askLibrary(q)}
+            onClose={() => setThread([])}
+            onOpenMeeting={(id) => {
+              setSelectedID(id);
+              setThread([]);
+            }}
+          />
+        ) : selectedID ? (
+          // Rendered directly, not inside a scroller: the detail pane manages
+          // its own scrolling so its ask composer can stay pinned at the
+          // bottom, which needs a bounded height here.
           <MeetingDetailPane
             key={selectedID}
             callID={selectedID}
@@ -247,6 +300,68 @@ export function MeetingsPage() {
           </DialogFooter>
         </DialogContent>
       </Dialog>
+    </div>
+  );
+}
+
+/**
+ * The answer side of library search. Takes the whole right pane rather than a
+ * dropdown under the box, because an answer worth reading is a paragraph and
+ * cites meetings you'll want to open — and opening one is a click on its chip.
+ */
+function LibraryAnswer({
+  thread,
+  asking,
+  meetings,
+  onAsk,
+  onClose,
+  onOpenMeeting,
+}: {
+  thread: ChatItem[];
+  asking: boolean;
+  meetings: MeetingSummary[];
+  onAsk: (question: string) => void;
+  onClose: () => void;
+  onOpenMeeting: (callID: string) => void;
+}) {
+  return (
+    <div className="flex h-full min-h-0 flex-col">
+      <Toolbar title="Across your meetings" subtitle={`${meetings.length} searched`}>
+        <Button variant="ghost" size="sm" onClick={onClose}>
+          Done
+        </Button>
+      </Toolbar>
+      <div className="min-h-0 flex-1 overflow-y-auto px-6 py-5">
+        <div className="mx-auto max-w-2xl">
+          <ChatThread
+            thread={thread}
+            busy={asking}
+            renderCitations={(callIDs) => (
+              <>
+                {callIDs.map((id) => {
+                  const meeting = meetings.find((m) => m.id === id);
+                  if (!meeting) return null;
+                  return (
+                    <button
+                      key={id}
+                      onClick={() => onOpenMeeting(id)}
+                      className="rounded-full border border-border px-2 py-0.5 text-[11px] text-muted-foreground transition-colors hover:bg-accent/60 hover:text-foreground"
+                      title="Open this meeting"
+                    >
+                      {displayTitle(meeting)} · {formatDateTime(meeting.startedAt)}
+                    </button>
+                  );
+                })}
+              </>
+            )}
+          />
+        </div>
+      </div>
+      <div className="shrink-0 border-t border-border px-6 py-3">
+        <div className="mx-auto max-w-2xl">
+          <AskBar placeholder="Ask a follow-up" busy={asking} autoFocus onSubmit={onAsk} onClear={onClose} />
+        </div>
+      </div>
     </div>
   );
 }

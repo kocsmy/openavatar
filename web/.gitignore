@@ -1,2 +1,6 @@
 node_modules/
 dist/
+
+# Local screenshot output (screenshot.mjs writes here)
+shots/
+main/
