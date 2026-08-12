@@ -86,18 +86,25 @@ struct SettingsView: View {
                     sidebarRow(.followUps)
                     sidebarRow(.metrics)
                 }
-                Section("Setup") {
-                    sidebarRow(.general)
-                    sidebarRow(.transcription)
-                    sidebarRow(.models)
-                    sidebarRow(.integrations)
-                    sidebarRow(.trust)
-                    sidebarRow(.memory)
-                    sidebarRow(.data)
-                }
             }
             .listStyle(.sidebar)
             .scrollContentBackground(.hidden)
+
+            // Setup moved to the web-rendered Settings window (shadcn UI
+            // experiment) — its own window, like Granola.
+            Divider()
+            Button {
+#if canImport(WebKit)
+                WebSettingsWindowController.shared.show()
+#endif
+            } label: {
+                Label("Settings", systemImage: "gearshape")
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .padding(.horizontal, DS.s16)
+            .padding(.vertical, DS.s8 + 2)
         }
         .background(.background.secondary.opacity(0.5))
     }

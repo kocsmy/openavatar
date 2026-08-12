@@ -1,0 +1,114 @@
+@import "tailwindcss";
+
+/*
+ * shadcn/ui theme tokens, tuned to OpenAvatar: neutral surfaces, ONE warm
+ * coral accent (#D1704F — matches the app icon and the native DS.brand).
+ * Dark mode follows the OS via prefers-color-scheme; WKWebView forwards the
+ * system appearance automatically.
+ */
+:root {
+  --background: oklch(0.988 0.002 80);
+  --foreground: oklch(0.23 0.01 50);
+  --card: oklch(1 0 0);
+  --card-foreground: oklch(0.23 0.01 50);
+  --popover: oklch(1 0 0);
+  --popover-foreground: oklch(0.23 0.01 50);
+  --primary: oklch(0.63 0.115 38);
+  --primary-foreground: oklch(0.99 0.005 80);
+  --secondary: oklch(0.955 0.004 80);
+  --secondary-foreground: oklch(0.3 0.01 50);
+  --muted: oklch(0.955 0.004 80);
+  --muted-foreground: oklch(0.52 0.01 60);
+  --accent: oklch(0.95 0.02 45);
+  --accent-foreground: oklch(0.3 0.02 40);
+  --destructive: oklch(0.55 0.19 27);
+  --destructive-foreground: oklch(0.99 0.005 80);
+  --success: oklch(0.55 0.13 150);
+  --warning: oklch(0.6 0.13 65);
+  --border: oklch(0.912 0.005 80);
+  --input: oklch(0.885 0.005 80);
+  --ring: oklch(0.63 0.115 38);
+  --sidebar: oklch(0.968 0.004 80);
+  --radius: 0.55rem;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --background: oklch(0.215 0.006 60);
+    --foreground: oklch(0.93 0.004 80);
+    --card: oklch(0.255 0.006 60);
+    --card-foreground: oklch(0.93 0.004 80);
+    --popover: oklch(0.26 0.006 60);
+    --popover-foreground: oklch(0.93 0.004 80);
+    --primary: oklch(0.7 0.115 38);
+    --primary-foreground: oklch(0.17 0.01 40);
+    --secondary: oklch(0.3 0.006 60);
+    --secondary-foreground: oklch(0.9 0.004 80);
+    --muted: oklch(0.3 0.006 60);
+    --muted-foreground: oklch(0.68 0.008 70);
+    --accent: oklch(0.32 0.02 45);
+    --accent-foreground: oklch(0.92 0.01 60);
+    --destructive: oklch(0.65 0.17 27);
+    --destructive-foreground: oklch(0.16 0.01 27);
+    --success: oklch(0.72 0.12 150);
+    --warning: oklch(0.75 0.12 70);
+    --border: oklch(0.33 0.007 60);
+    --input: oklch(0.37 0.007 60);
+    --ring: oklch(0.7 0.115 38);
+    --sidebar: oklch(0.245 0.006 60);
+  }
+}
+
+@theme inline {
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+  --color-card: var(--card);
+  --color-card-foreground: var(--card-foreground);
+  --color-popover: var(--popover);
+  --color-popover-foreground: var(--popover-foreground);
+  --color-primary: var(--primary);
+  --color-primary-foreground: var(--primary-foreground);
+  --color-secondary: var(--secondary);
+  --color-secondary-foreground: var(--secondary-foreground);
+  --color-muted: var(--muted);
+  --color-muted-foreground: var(--muted-foreground);
+  --color-accent: var(--accent);
+  --color-accent-foreground: var(--accent-foreground);
+  --color-destructive: var(--destructive);
+  --color-destructive-foreground: var(--destructive-foreground);
+  --color-success: var(--success);
+  --color-warning: var(--warning);
+  --color-border: var(--border);
+  --color-input: var(--input);
+  --color-ring: var(--ring);
+  --color-sidebar: var(--sidebar);
+  --radius-sm: calc(var(--radius) - 4px);
+  --radius-md: calc(var(--radius) - 2px);
+  --radius-lg: var(--radius);
+  --radius-xl: calc(var(--radius) + 4px);
+  --font-sans: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Segoe UI",
+    Roboto, "Helvetica Neue", Arial, sans-serif;
+  --font-mono: ui-monospace, "SF Mono", SFMono-Regular, Menlo, monospace;
+}
+
+html,
+body {
+  height: 100%;
+}
+
+body {
+  @apply bg-background text-foreground antialiased;
+  font-size: 13px;
+  /* Feel like an app pane, not a web page. */
+  user-select: none;
+  -webkit-user-select: none;
+  cursor: default;
+  overscroll-behavior: none;
+}
+
+input,
+textarea,
+[data-selectable] {
+  user-select: text;
+  -webkit-user-select: text;
+}

@@ -52,6 +52,20 @@ jobs:
           restore-keys: |
             ${{ runner.os }}-spm-
 
+      # The web settings UI (WKWebView-hosted shadcn app). Built on every run
+      # so branch pushes catch TypeScript/build breaks; the release step
+      # packages web/dist into Contents/Resources/WebUI via make-app.sh.
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+
+      - name: Build web settings UI
+        run: npm ci --no-audit --no-fund && npm run build
+        working-directory: web
+
       # Compile the package AND the test target in one pass, then run tests
       # without a second compile.
       - name: Build (incl. tests)
