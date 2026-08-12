@@ -3,8 +3,9 @@ import { fileURLToPath } from "node:url";
 import react from "@vitejs/plugin-react";
 import tailwindcss from "@tailwindcss/vite";
 
-// base "./" — the app is loaded from a file:// URL inside the app bundle
-// (Contents/Resources/WebUI), so every asset reference must be relative.
+// base "./" — the bundle is served from inside the app (Contents/Resources/
+// WebUI, over the openavatar-ui:// scheme), so asset references must be
+// relative to index.html rather than to a server root.
 export default defineConfig({
   plugins: [react(), tailwindcss()],
   base: "./",

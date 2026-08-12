@@ -43,6 +43,28 @@ final class WebBridgeTests: XCTestCase {
         XCTAssertNil(WebUISchemeHandler.resolve(path: "/missing.js", under: root))
     }
 
+#if canImport(AppKit)
+    @MainActor func testWindowSpecsAreDistinctAndNameRealSurfaces() {
+        // Two windows sharing an id would share a frame autosave name and
+        // fight over the same saved frame; a surface the bundle doesn't know
+        // mounts the settings root instead (see web/src/lib/surface.ts).
+        let specs: [WebHost.Spec] = [.settings, .main, .call, .onboarding]
+        XCTAssertEqual(Set(specs.map(\.id)).count, specs.count)
+        let known = Set(["settings", "main", "call", "onboarding", "menu"])
+        for spec in specs {
+            XCTAssertTrue(known.contains(spec.surface), "unknown surface \(spec.surface)")
+        }
+    }
+#endif
+
+    func testEventTopicsMatchTheWebContract() {
+        // Must equal the EventTopic union in web/src/lib/types.ts — a topic
+        // only Swift knows about is a page that never refreshes.
+        let topics = Set([WebEventBus.Topic.state, .transcript, .meetings, .followups, .errors]
+            .map(\.rawValue))
+        XCTAssertEqual(topics, ["state", "transcript", "meetings", "followups", "errors"])
+    }
+
     func testSchemeHandlerMimeTypes() {
         // Wrong MIME on a module script is another silent blank window.
         XCTAssertEqual(WebUISchemeHandler.mimeType(forExtension: "js"), "text/javascript")
