@@ -163,8 +163,18 @@ final class MeetingChat {
         guard !reply.lowercased().contains("none") else { return [] }
         var seen = Set<Int>()
         var out: [ContextStore.CallRecord] = []
-        for match in reply.split(whereSeparator: { !$0.isNumber }) {
-            guard let number = Int(match), number >= 1, number <= calls.count,
+        let characters = Array(reply)
+        var i = 0
+        while i < characters.count {
+            guard characters[i].isNumber else { i += 1; continue }
+            var end = i
+            while end < characters.count, characters[end].isNumber { end += 1 }
+            // Splitting on non-digits would strip the sign and turn "-1" into
+            // meeting #1 — a nonsense answer quietly reading a real transcript.
+            let negated = i > 0 && characters[i - 1] == "-"
+            let digits = Int(String(characters[i..<end]))
+            i = end
+            guard !negated, let number = digits, number >= 1, number <= calls.count,
                   !seen.contains(number) else { continue }
             seen.insert(number)
             out.append(calls[number - 1])
