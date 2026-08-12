@@ -342,7 +342,7 @@ final class SettingsBridge {
 
     /// Kick off (or re-check) whisper setup; the web page polls status.
     private func setupWhisper(_ params: JSONValue) -> JSONValue {
-        let model: WhisperModel? = switch params["model"]?.stringValue {
+        let model: WhisperModel? = switch params["model"]?.stringValue ?? "" {
         case "base": .base
         case "small": .small
         case "medium": .medium
