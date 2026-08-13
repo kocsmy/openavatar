@@ -233,6 +233,61 @@ final class DiarizationTests: XCTestCase {
         XCTAssertEqual(stored.embedding, evolved)
         XCTAssertGreaterThan(stored.sampleCount, 1)
     }
+
+    /// A named voice absorbs a call's audio only once the end-of-call pass has
+    /// confirmed the person was there. Skipping that check is how one wrong
+    /// match becomes many: the centroid drifts toward whoever was really
+    /// speaking, so the next call matches them even more confidently.
+    func testUnconfirmedNamedVoiceKeepsItsFingerprint() async throws {
+        let store = try ContextStore(inMemory: true)
+        let now = Date()
+        let original = [Float](repeating: 0.2, count: 256)
+        let claire = SpeakerProfile(id: UUID(), name: "Claire", ordinal: 1, embedding: original,
+                                    sampleCount: 12, createdAt: now, updatedAt: now)
+        try store.insertSpeakerProfile(claire)
+
+        let backend = FakeDiarizerBackend()
+        backend.script = [[turn(claire.id.uuidString, 0, 10)]]
+        let diarizer = makeDiarizer(store: store, backend: backend)
+        await diarizer.beginCall()
+        await diarizer.ingest(chunk: chunk())
+        _ = await diarizer.label(for: segment(1, 9))
+
+        let drifted = [Float](repeating: 0.9, count: 256)
+        backend.finals = [claire.id.uuidString: drifted]
+
+        await diarizer.endCall()
+        XCTAssertEqual(try store.allSpeakerProfiles().first?.embedding, original,
+                       "an unconfirmed match must not rewrite somebody's voice")
+
+        await diarizer.endCall(confirmed: [claire.id])
+        XCTAssertEqual(try store.allSpeakerProfiles().first?.embedding, drifted)
+    }
+
+    /// The roster narrows live enrollment too. Every named voice in the
+    /// database otherwise arrives as a permanent centroid competing for each
+    /// turn, and on a two-person call one voice gets scattered across them.
+    func testRosterNarrowsEnrollment() async throws {
+        let store = try ContextStore(inMemory: true)
+        let now = Date()
+        let joao = SpeakerProfile(id: UUID(), name: "Joao", ordinal: 1,
+                                  embedding: [Float](repeating: 0.2, count: 256),
+                                  sampleCount: 12, createdAt: now, updatedAt: now)
+        let claire = SpeakerProfile(id: UUID(), name: "Claire", ordinal: 2,
+                                    embedding: [Float](repeating: 0.4, count: 256),
+                                    sampleCount: 12, createdAt: now, updatedAt: now)
+        try store.insertSpeakerProfile(joao)
+        try store.insertSpeakerProfile(claire)
+
+        let backend = FakeDiarizerBackend()
+        backend.script = [[]]
+        let diarizer = makeDiarizer(store: store, backend: backend)
+        await diarizer.beginCall()
+        await diarizer.setRoster(["Joao Ferreira"])
+        await diarizer.ingest(chunk: chunk())
+
+        XCTAssertEqual(backend.enrolledIDs, [joao.id.uuidString])
+    }
 }
 
 /// The pure timeline join: transcript spans → majority-overlap speaker.

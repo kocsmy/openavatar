@@ -100,6 +100,8 @@ actor SpeakerDiarizer {
     private var enrolled = false
     /// "Speaker N" numbering scoped to this call, in first-heard order.
     private var callOrdinals: [UUID: Int] = [:]
+    /// Who the calendar says is on this call, when it says anything.
+    private var roster: [String] = []
 
     init(store: ContextStore = .shared,
          backendFactory: @escaping @Sendable () -> DiarizerBackend = { FluidDiarizerBackend() }) {
@@ -118,7 +120,19 @@ actor SpeakerDiarizer {
         labeledCounts = [:]
         callOrdinals = [:]
         enrolled = false
+        roster = []
         Task { await prepareBackend() }
+    }
+
+    /// Tell the diarizer who was invited. The calendar answers a moment after
+    /// the call starts, so this usually lands before the models finish loading
+    /// and simply narrows the enrollment below; if enrollment already
+    /// happened against the whole database, it is redone on the next chunk.
+    func setRoster(_ names: [String]) {
+        let incoming = names.filter { !$0.isEmpty }
+        guard incoming != roster else { return }
+        roster = incoming
+        enrolled = false
     }
 
     private func prepareBackend() async {
@@ -141,9 +155,18 @@ actor SpeakerDiarizer {
     /// that is how people who were never on a call ended up in its transcript.
     /// An unnamed match also buys nothing: the end-of-call pass regroups the
     /// call from scratch anyway.
+    ///
+    /// Named voices have the same problem once there are enough of them:
+    /// every person the user has ever named arrives as a permanent centroid
+    /// competing for each turn, and on a two-person call one voice gets
+    /// scattered across half a dozen of them. When the calendar knows who was
+    /// invited, only those voices are enrolled.
     private func enrollStoredProfiles() {
         guard !enrolled, backend.isReady else { return }
-        let known = profiles.filter { $0.embedding.count >= 100 && $0.isNamed }
+        var known = profiles.filter { $0.embedding.count >= 100 && $0.isNamed }
+        if !roster.isEmpty {
+            known = known.filter { CallSpeakerFinalizer.names($0.name ?? "", matchAnyOf: roster) }
+        }
         backend.enroll(known.map { ($0.id.uuidString, $0.name, $0.embedding) })
         for p in known { backendToProfile[p.id.uuidString] = p.id }
         enrolled = true
@@ -211,12 +234,20 @@ actor SpeakerDiarizer {
 
     /// End of call: persist the backend's evolved voice centroids and the
     /// utterance counts, so the next call's enrollment matches better.
-    func endCall() {
+    ///
+    /// `confirmed` is what the end-of-call pass stands behind. A named voice
+    /// absorbs this call's audio only if it is in there, because a wrong match
+    /// otherwise compounds: fold a stranger's speech into somebody's
+    /// fingerprint and the centroid drifts toward the stranger, matching them
+    /// even better next time. Voices this call discovered for itself are
+    /// always written back — there is nobody else's identity to damage.
+    func endCall(confirmed: Set<UUID> = []) {
         for (backendID, embedding) in backend.finalEmbeddings() {
             guard let profileID = backendToProfile[backendID],
                   let index = profiles.firstIndex(where: { $0.id == profileID }),
                   !embedding.isEmpty else { continue }
             var p = profiles[index]
+            if p.isNamed, !confirmed.contains(p.id) { continue }
             guard p.embedding.count == embedding.count else { continue }   // never cross spaces
             p.embedding = embedding
             p.sampleCount += max(1, labeledCounts[profileID, default: 0])
