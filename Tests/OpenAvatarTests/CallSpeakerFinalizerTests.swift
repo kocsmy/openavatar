@@ -159,7 +159,74 @@ final class CallSpeakerFinalizerTests: XCTestCase {
         XCTAssertEqual(try store.allSpeakerProfiles().count, 1)
     }
 
+    /// The bug this gate exists for: a two-person call listing six people,
+    /// every one of them a voice named on an EARLIER call. The database grows
+    /// a name at a time, and "closest voice on file" eventually finds somebody
+    /// for everybody. Only the people invited may be recognized.
+    func testOnlyInvitedVoicesCanBeRecognized() async throws {
+        let store = try ContextStore(inMemory: true)
+        let now = Date()
+        let shared = [Float](repeating: 0.1, count: 256)   // all equally "matching"
+        var byName: [String: UUID] = [:]
+        for name in ["Joao", "Conrad", "Vasilis", "Paul", "Tiago", "Ben", "Claire"] {
+            let profile = SpeakerProfile(id: UUID(), name: name, ordinal: byName.count + 1,
+                                         embedding: shared, sampleCount: 30,
+                                         createdAt: now, updatedAt: now)
+            try store.insertSpeakerProfile(profile)
+            byName[name] = profile.id
+        }
+        let callID = try store.startCall(app: "Google Meet")
+        try store.insert([segment(0, 40)], callID: callID)
+
+        let backend = FakeOfflineDiarizerBackend()
+        backend.turns = [turn("A", 0, 40, value: 0.1)]
+        let finalizer = CallSpeakerFinalizer(store: store, backend: backend)
+        let outcome = await finalizer.finalize(callID: callID,
+                                               audioURL: URL(fileURLWithPath: "/tmp/x.wav"),
+                                               maxSpeakers: 2, roster: ["Joao Ferreira"])
+
+        XCTAssertEqual(outcome.voices, 1)
+        let seg = try XCTUnwrap(store.segments(callID: callID).first)
+        XCTAssertEqual(seg.speakerID, byName["Joao"]?.uuidString)
+        XCTAssertEqual(seg.speaker, "Joao")
+    }
+
     // MARK: Pure helpers
+
+    /// With no roster to check against, a crowded database must not hand out a
+    /// name on a coin flip: two voices equally close is a recognition of
+    /// neither, and "Speaker 1" is one click from being right.
+    func testTiedStoredVoicesAreNotARecognition() {
+        let now = Date()
+        let shared = [Float](repeating: 0.1, count: 256)
+        let ben = SpeakerProfile(id: UUID(), name: "Ben", ordinal: 1, embedding: shared,
+                                 sampleCount: 30, createdAt: now, updatedAt: now)
+        let claire = SpeakerProfile(id: UUID(), name: "Claire", ordinal: 2, embedding: shared,
+                                    sampleCount: 30, createdAt: now, updatedAt: now)
+        XCTAssertNil(CallSpeakerFinalizer.nearestNamed(to: shared, among: [ben, claire]))
+        XCTAssertEqual(CallSpeakerFinalizer.nearestNamed(to: shared, among: [ben]), ben.id)
+    }
+
+    func testRosterMatchingWorksInBothDirections() {
+        XCTAssertTrue(CallSpeakerFinalizer.names("Vasilis", matchAnyOf: ["Vasilis Andreou"]))
+        XCTAssertTrue(CallSpeakerFinalizer.names("Vasilis Andreou", matchAnyOf: ["Vasilis"]))
+        XCTAssertFalse(CallSpeakerFinalizer.names("Conrad", matchAnyOf: ["Vasilis Andreou"]))
+        XCTAssertFalse(CallSpeakerFinalizer.names("", matchAnyOf: ["Vasilis"]))
+    }
+
+    /// No calendar, no roster — every named voice stays eligible, and the
+    /// margin above is what guards the match instead.
+    func testWithoutARosterEveryVoiceStaysEligible() {
+        let now = Date()
+        let embedding = [Float](repeating: 0.1, count: 256)
+        let named = SpeakerProfile(id: UUID(), name: "Ben", ordinal: 1, embedding: embedding,
+                                   sampleCount: 5, createdAt: now, updatedAt: now)
+        let unnamed = SpeakerProfile(id: UUID(), name: nil, ordinal: 2, embedding: embedding,
+                                     sampleCount: 5, createdAt: now, updatedAt: now)
+        XCTAssertEqual(CallSpeakerFinalizer.eligible([named, unnamed], roster: []).count, 2)
+        XCTAssertEqual(CallSpeakerFinalizer.eligible([named, unnamed], roster: ["Ben"]).map(\.id),
+                       [named.id])
+    }
 
     func testClustersAreDurationWeighted() {
         let clusters = CallSpeakerFinalizer.clusters(from: [

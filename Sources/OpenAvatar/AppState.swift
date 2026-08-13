@@ -394,6 +394,9 @@ final class AppState: ObservableObject {
                 let event = try await calendar.currentEvent(calendarID: settings.calendarID)
                 currentEvent = event
                 callAttendees = event?.others(excludingSelfEmail: settings.calendarSelfEmail) ?? []
+                // Narrows which stored voices may be recognized live, from
+                // "everyone this app has ever named" to "the people invited".
+                await diarizer.setRoster(callAttendees.map(\.name))
                 if let event { adoptEventContext(event) }
             } catch {
                 // Calendar is a convenience; surface but never disrupt the call.
@@ -521,8 +524,10 @@ final class AppState: ObservableObject {
                 // Persist the evolved voice centroids so the next call's
                 // enrollment recognizes everyone faster.
                 if settings.diarizationEnabled {
-                    await diarizer.endCall()
-                    await finalizeSpeakers(callID: callID)
+                    // Order matters: the offline pass decides who was really
+                    // here, and only those voices may absorb this call's audio.
+                    let confirmed = await finalizeSpeakers(callID: callID)
+                    await diarizer.endCall(confirmed: confirmed)
                 }
             }
 #if canImport(AppKit)
@@ -764,15 +769,19 @@ final class AppState: ObservableObject {
     /// how many people there actually were. Runs before the consolidation
     /// pass, so the LLM is asked to name settled voices rather than the
     /// provisional ones streaming invented.
-    private func finalizeSpeakers(callID: UUID) async {
-        guard let audioURL = await callAudio.finish() else { return }
+    /// Returns the fingerprints the pass stands behind, for the centroid
+    /// write-back to gate on.
+    private func finalizeSpeakers(callID: UUID) async -> Set<UUID> {
+        guard let audioURL = await callAudio.finish() else { return [] }
         // Invitees bound how many voices the clusterer may find — a ceiling,
         // never an exact count, since invitations are not attendance and a
-        // no-show must not force the clusterer to invent someone. Without a
+        // no-show must not force the clusterer to invent someone. The same
+        // list decides which stored voices may be recognized at all. Without a
         // calendar event it auto-detects as before.
         let ceiling = callAttendees.isEmpty ? nil : callAttendees.count + 1
-        _ = await speakerFinalizer.finalize(callID: callID, audioURL: audioURL,
-                                            maxSpeakers: ceiling)
+        let outcome = await speakerFinalizer.finalize(callID: callID, audioURL: audioURL,
+                                                      maxSpeakers: ceiling,
+                                                      roster: callAttendees.map(\.name))
         await callAudio.discard()
         await diarizer.reset()
 
@@ -790,6 +799,7 @@ final class AppState: ObservableObject {
         WebEventBus.shared.emit(.transcript)
         WebEventBus.shared.emit(.meetings)
 #endif
+        return outcome.identified
     }
 
     // MARK: - Speakers in the current call (for the editable roster UI)
