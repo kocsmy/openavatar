@@ -92,7 +92,8 @@ final class DiarizationTests: XCTestCase {
         await diarizer.beginCall()
         await diarizer.ingest(chunk: chunk())
 
-        let hit = try XCTUnwrap(await diarizer.label(for: segment(1, 9)))
+        let labeled = await diarizer.label(for: segment(1, 9))
+        let hit = try XCTUnwrap(labeled)
         XCTAssertNotEqual(hit.id, alice.id)
         XCTAssertEqual(hit.label, "Speaker 1",
                        "a stored name may only reach a call through a human or the roster")
@@ -172,7 +173,8 @@ final class DiarizationTests: XCTestCase {
         await diarizer.beginCall()
 
         await diarizer.ingest(chunk: chunk())
-        let before = try XCTUnwrap(await diarizer.label(for: segment(1, 9)))
+        let labeledBefore = await diarizer.label(for: segment(1, 9))
+        let before = try XCTUnwrap(labeledBefore)
         XCTAssertEqual(before.label, "Speaker 1")
 
         try store.renameSpeaker(id: before.id, to: "João")
