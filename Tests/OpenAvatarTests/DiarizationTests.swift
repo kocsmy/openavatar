@@ -1,26 +1,21 @@
 import XCTest
 @testable import OpenAvatar
 
-/// Per-voice diarization: the backend finds acoustic speaker turns, transcript
-/// segments take the majority-overlap speaker, and stored fingerprints are
-/// enrolled so names persist across calls. The backend is scripted here —
-/// FluidAudio's real pipeline would download CoreML models in CI.
+/// Live per-voice diarization: the backend finds acoustic speaker turns and
+/// transcript segments take the majority-overlap speaker. Voices are per-call
+/// — the backend starts every call empty and stored fingerprints are never
+/// fed to it. The backend is scripted here; FluidAudio's real pipeline would
+/// download CoreML models in CI.
 final class FakeDiarizerBackend: DiarizerBackend, @unchecked Sendable {
     var ready = true
     /// Turns returned per diarize() call, consumed in order.
     var script: [[SpeakerTurn]] = []
-    var enrolledIDs: [String] = []
-    var finals: [String: [Float]] = [:]
 
     var isReady: Bool { ready }
     func prepare() async throws {}
-    func enroll(_ known: [(id: String, name: String?, embedding: [Float])]) {
-        enrolledIDs = known.map(\.id)
-    }
     func diarize(_ samples: [Float], at time: TimeInterval) throws -> [SpeakerTurn] {
         script.isEmpty ? [] : script.removeFirst()
     }
-    func finalEmbeddings() -> [String: [Float]] { finals }
 }
 
 final class DiarizationTests: XCTestCase {
@@ -60,8 +55,8 @@ final class DiarizationTests: XCTestCase {
         XCTAssertEqual(seg.speakerLabel, "Speaker 3")
     }
 
-    /// Two acoustic voices inside one chunk → two persistent profiles, and
-    /// each transcript span gets the voice that did most of its talking.
+    /// Two acoustic voices inside one chunk → two per-call profiles, and each
+    /// transcript span gets the voice that did most of its talking.
     func testTwoVoicesInOneChunkGetDistinctSpeakers() async throws {
         let store = try ContextStore(inMemory: true)
         let backend = FakeDiarizerBackend()
@@ -79,31 +74,28 @@ final class DiarizationTests: XCTestCase {
         XCTAssertEqual(Set([first?.label, second?.label]), ["Speaker 1", "Speaker 2"])
     }
 
-    /// Unnamed fingerprints from earlier calls are NOT enrolled. Seeding the
-    /// backend with every voice it had ever heard gave dozens of weak
-    /// centroids the chance to claim a stranger's speech — that is how people
-    /// who were never on a call ended up in its transcript. Only voices the
-    /// user (or the roster) actually named are worth matching; the rest are
-    /// regrouped from scratch by the end-of-call pass.
-    func testOnlyNamedProfilesAreEnrolled() async throws {
+    /// The recognition that kept putting absent people on calls is gone: a
+    /// voice named on an earlier call stays out of this one. The backend
+    /// starts empty, so a new call's voices are always fresh "Speaker N"
+    /// profiles, never somebody from the database.
+    func testStoredNamesNeverAppearLive() async throws {
         let store = try ContextStore(inMemory: true)
         let now = Date()
-        let named = SpeakerProfile(id: UUID(), name: "Alice", ordinal: 1,
+        let alice = SpeakerProfile(id: UUID(), name: "Alice", ordinal: 1,
                                    embedding: [Float](repeating: 0.2, count: 256),
                                    sampleCount: 12, createdAt: now, updatedAt: now)
-        let stray = SpeakerProfile(id: UUID(), name: nil, ordinal: 2,
-                                   embedding: [Float](repeating: 0.4, count: 256),
-                                   sampleCount: 1, createdAt: now, updatedAt: now)
-        try store.insertSpeakerProfile(named)
-        try store.insertSpeakerProfile(stray)
+        try store.insertSpeakerProfile(alice)
 
         let backend = FakeDiarizerBackend()
-        backend.script = [[]]
+        backend.script = [[turn("X", 0, 10)]]
         let diarizer = makeDiarizer(store: store, backend: backend)
         await diarizer.beginCall()
         await diarizer.ingest(chunk: chunk())
 
-        XCTAssertEqual(backend.enrolledIDs, [named.id.uuidString])
+        let hit = try XCTUnwrap(await diarizer.label(for: segment(1, 9)))
+        XCTAssertNotEqual(hit.id, alice.id)
+        XCTAssertEqual(hit.label, "Speaker 1",
+                       "a stored name may only reach a call through a human or the roster")
     }
 
     /// Live "Speaker N" numbering restarts each call. The stored ordinal is a
@@ -171,122 +163,25 @@ final class DiarizationTests: XCTestCase {
         XCTAssertEqual(count, 1)
     }
 
-    /// A named stored fingerprint is enrolled into the backend; when the
-    /// backend assigns its id, the name carries — across calls, no new profile.
-    func testNamePersistsAcrossCallsViaEnrollment() async throws {
+    /// A mid-call rename shows up on the very next utterance after reset().
+    func testRenameCarriesToLaterUtterancesInTheSameCall() async throws {
         let store = try ContextStore(inMemory: true)
-        let now = Date()
-        let alice = SpeakerProfile(id: UUID(), name: "Alice", ordinal: 1,
-                                   embedding: [Float](repeating: 0.2, count: 256),
-                                   sampleCount: 12, createdAt: now, updatedAt: now)
-        try store.insertSpeakerProfile(alice)
-
         let backend = FakeDiarizerBackend()
-        backend.script = [[turn(alice.id.uuidString, 0, 10)]]
+        backend.script = [[turn("A", 0, 10)], [turn("A", 15, 25)]]
         let diarizer = makeDiarizer(store: store, backend: backend)
         await diarizer.beginCall()
 
         await diarizer.ingest(chunk: chunk())
-        XCTAssertEqual(backend.enrolledIDs, [alice.id.uuidString])
-        let hit = await diarizer.label(for: segment(1, 9))
-        XCTAssertEqual(hit?.id, alice.id)
-        XCTAssertEqual(hit?.label, "Alice")
-        let count = await diarizer.speakerCount
-        XCTAssertEqual(count, 1, "An enrolled voice must not mint a duplicate profile")
-    }
+        let before = try XCTUnwrap(await diarizer.label(for: segment(1, 9)))
+        XCTAssertEqual(before.label, "Speaker 1")
 
-    /// Legacy spectral fingerprints (25-dim) are never enrolled — wrong
-    /// vector space — but they stay in the store untouched.
-    func testLegacyProfilesAreNotEnrolled() async throws {
-        let store = try ContextStore(inMemory: true)
-        let now = Date()
-        let legacy = SpeakerProfile(id: UUID(), name: "Old Bob", ordinal: 1,
-                                    embedding: [Float](repeating: 0.3, count: 25),
-                                    sampleCount: 40, createdAt: now, updatedAt: now)
-        try store.insertSpeakerProfile(legacy)
+        try store.renameSpeaker(id: before.id, to: "João")
+        await diarizer.reset()
 
-        let backend = FakeDiarizerBackend()
-        backend.script = [[]]
-        let diarizer = makeDiarizer(store: store, backend: backend)
-        await diarizer.beginCall()
-        await diarizer.ingest(chunk: chunk())
-
-        XCTAssertTrue(backend.enrolledIDs.isEmpty)
-        XCTAssertEqual(try store.allSpeakerProfiles().count, 1)
-    }
-
-    /// endCall writes the backend's evolved centroid back to the store.
-    func testEndCallPersistsEvolvedEmbeddings() async throws {
-        let store = try ContextStore(inMemory: true)
-        let backend = FakeDiarizerBackend()
-        backend.script = [[turn("A", 0, 10)]]
-        let diarizer = makeDiarizer(store: store, backend: backend)
-        await diarizer.beginCall()
-        await diarizer.ingest(chunk: chunk())
-        _ = await diarizer.label(for: segment(1, 9))
-
-        let evolved = [Float](repeating: 0.5, count: 256)
-        backend.finals = ["A": evolved]
-        await diarizer.endCall()
-
-        let stored = try XCTUnwrap(store.allSpeakerProfiles().first)
-        XCTAssertEqual(stored.embedding, evolved)
-        XCTAssertGreaterThan(stored.sampleCount, 1)
-    }
-
-    /// A named voice absorbs a call's audio only once the end-of-call pass has
-    /// confirmed the person was there. Skipping that check is how one wrong
-    /// match becomes many: the centroid drifts toward whoever was really
-    /// speaking, so the next call matches them even more confidently.
-    func testUnconfirmedNamedVoiceKeepsItsFingerprint() async throws {
-        let store = try ContextStore(inMemory: true)
-        let now = Date()
-        let original = [Float](repeating: 0.2, count: 256)
-        let claire = SpeakerProfile(id: UUID(), name: "Claire", ordinal: 1, embedding: original,
-                                    sampleCount: 12, createdAt: now, updatedAt: now)
-        try store.insertSpeakerProfile(claire)
-
-        let backend = FakeDiarizerBackend()
-        backend.script = [[turn(claire.id.uuidString, 0, 10)]]
-        let diarizer = makeDiarizer(store: store, backend: backend)
-        await diarizer.beginCall()
-        await diarizer.ingest(chunk: chunk())
-        _ = await diarizer.label(for: segment(1, 9))
-
-        let drifted = [Float](repeating: 0.9, count: 256)
-        backend.finals = [claire.id.uuidString: drifted]
-
-        await diarizer.endCall()
-        XCTAssertEqual(try store.allSpeakerProfiles().first?.embedding, original,
-                       "an unconfirmed match must not rewrite somebody's voice")
-
-        await diarizer.endCall(confirmed: [claire.id])
-        XCTAssertEqual(try store.allSpeakerProfiles().first?.embedding, drifted)
-    }
-
-    /// The roster narrows live enrollment too. Every named voice in the
-    /// database otherwise arrives as a permanent centroid competing for each
-    /// turn, and on a two-person call one voice gets scattered across them.
-    func testRosterNarrowsEnrollment() async throws {
-        let store = try ContextStore(inMemory: true)
-        let now = Date()
-        let joao = SpeakerProfile(id: UUID(), name: "Joao", ordinal: 1,
-                                  embedding: [Float](repeating: 0.2, count: 256),
-                                  sampleCount: 12, createdAt: now, updatedAt: now)
-        let claire = SpeakerProfile(id: UUID(), name: "Claire", ordinal: 2,
-                                    embedding: [Float](repeating: 0.4, count: 256),
-                                    sampleCount: 12, createdAt: now, updatedAt: now)
-        try store.insertSpeakerProfile(joao)
-        try store.insertSpeakerProfile(claire)
-
-        let backend = FakeDiarizerBackend()
-        backend.script = [[]]
-        let diarizer = makeDiarizer(store: store, backend: backend)
-        await diarizer.beginCall()
-        await diarizer.setRoster(["Joao Ferreira"])
-        await diarizer.ingest(chunk: chunk())
-
-        XCTAssertEqual(backend.enrolledIDs, [joao.id.uuidString])
+        await diarizer.ingest(chunk: chunk(t0: 15))
+        let after = await diarizer.label(for: segment(16, 24))
+        XCTAssertEqual(after?.id, before.id)
+        XCTAssertEqual(after?.label, "João")
     }
 }
 

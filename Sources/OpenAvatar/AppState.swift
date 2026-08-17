@@ -394,9 +394,6 @@ final class AppState: ObservableObject {
                 let event = try await calendar.currentEvent(calendarID: settings.calendarID)
                 currentEvent = event
                 callAttendees = event?.others(excludingSelfEmail: settings.calendarSelfEmail) ?? []
-                // Narrows which stored voices may be recognized live, from
-                // "everyone this app has ever named" to "the people invited".
-                await diarizer.setRoster(callAttendees.map(\.name))
                 if let event { adoptEventContext(event) }
             } catch {
                 // Calendar is a convenience; surface but never disrupt the call.
@@ -521,13 +518,8 @@ final class AppState: ObservableObject {
                 let summary = digestItems.map(\.summary).joined(separator: "; ")
                 try? store.endCall(callID, summary: summary.isEmpty ? nil : summary)
 
-                // Persist the evolved voice centroids so the next call's
-                // enrollment recognizes everyone faster.
                 if settings.diarizationEnabled {
-                    // Order matters: the offline pass decides who was really
-                    // here, and only those voices may absorb this call's audio.
-                    let confirmed = await finalizeSpeakers(callID: callID)
-                    await diarizer.endCall(confirmed: confirmed)
+                    await finalizeSpeakers(callID: callID)
                 }
             }
 #if canImport(AppKit)
@@ -699,8 +691,8 @@ final class AppState: ObservableObject {
                 // Per-voice diarization on the "Others" (system) channel: the
                 // chunk's audio is diarized into acoustic speaker turns first,
                 // then each transcript segment takes the speaker who did most
-                // of the talking in its time range. Named fingerprints are
-                // enrolled at call start, so names carry across calls.
+                // of the talking in its time range. Voices are per-call —
+                // provisional "Speaker N" labels the end-of-call pass settles.
                 if settings.diarizationEnabled, chunk.source == .system {
                     await diarizer.ingest(chunk: chunk)
                     for i in segments.indices {
@@ -742,8 +734,9 @@ final class AppState: ObservableObject {
     }
 
     /// If exactly one other attendee is known and this is a still-unnamed voice,
-    /// assign that attendee's name to the fingerprint (carries forward). Returns
-    /// the name applied, or nil to leave the "Speaker N" label as-is.
+    /// assign that attendee's name to this call's fingerprint, so the live
+    /// transcript reads right immediately (the end-of-call pass would settle it
+    /// anyway). Returns the name applied, or nil to leave "Speaker N" as-is.
     private func prefillName(for hit: DiarizedSpeaker) async -> String? {
         guard settings.calendarEnabled,
               hit.label.hasPrefix("Speaker "),
@@ -768,20 +761,19 @@ final class AppState: ObservableObject {
     /// point where the app can see every utterance a person made and decide
     /// how many people there actually were. Runs before the consolidation
     /// pass, so the LLM is asked to name settled voices rather than the
-    /// provisional ones streaming invented.
-    /// Returns the fingerprints the pass stands behind, for the centroid
-    /// write-back to gate on.
-    private func finalizeSpeakers(callID: UUID) async -> Set<UUID> {
-        guard let audioURL = await callAudio.finish() else { return [] }
-        // Invitees bound how many voices the clusterer may find — a ceiling,
+    /// provisional ones streaming invented. On a 1:1 call (one other invitee)
+    /// the finalizer skips clustering entirely — the system channel IS that
+    /// person, so no audio is needed.
+    private func finalizeSpeakers(callID: UUID) async {
+        let audioURL = await callAudio.finish()
+        // Invitees cap how many voices the clusterer may find — a ceiling,
         // never an exact count, since invitations are not attendance and a
-        // no-show must not force the clusterer to invent someone. The same
-        // list decides which stored voices may be recognized at all. Without a
-        // calendar event it auto-detects as before.
+        // no-show must not force the clusterer to invent someone. Without a
+        // calendar event it auto-detects.
         let ceiling = callAttendees.isEmpty ? nil : callAttendees.count + 1
-        let outcome = await speakerFinalizer.finalize(callID: callID, audioURL: audioURL,
-                                                      maxSpeakers: ceiling,
-                                                      roster: callAttendees.map(\.name))
+        await speakerFinalizer.finalize(callID: callID, audioURL: audioURL,
+                                        maxSpeakers: ceiling,
+                                        roster: callAttendees.map(\.name))
         await callAudio.discard()
         await diarizer.reset()
 
@@ -799,7 +791,6 @@ final class AppState: ObservableObject {
         WebEventBus.shared.emit(.transcript)
         WebEventBus.shared.emit(.meetings)
 #endif
-        return outcome.identified
     }
 
     // MARK: - Speakers in the current call (for the editable roster UI)
@@ -868,16 +859,6 @@ final class AppState: ObservableObject {
             }
         }
         Task { await diarizer.reset() }
-    }
-
-    /// Global cleanup of accumulated fingerprint over-splitting ("Tidy up
-    /// stray voices"). Folds near-duplicate low-evidence voices into their
-    /// nearest substantial match across all calls. Returns how many were folded.
-    func sweepStrayVoices() -> Int {
-        guard !isListening else { return 0 }
-        let merged = (try? store.sweepStrayProfiles()) ?? 0
-        if merged > 0 { Task { await diarizer.reset() } }
-        return merged
     }
 
     /// Break one call's voice out of a wrongly-matched profile (the inverse of

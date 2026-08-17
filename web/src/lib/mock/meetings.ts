@@ -248,15 +248,6 @@ export const meetingsMocks: MockHandlers = {
     emitLocal("meetings");
     return {};
   },
-  "meetings.sweepStrayVoices": async () => {
-    const stray = speakers.filter((s) => !s.name && s.sampleCount <= 3);
-    for (const s of stray) {
-      const idx = speakers.findIndex((x) => x.id === s.id);
-      if (idx >= 0) speakers.splice(idx, 1);
-    }
-    if (stray.length > 0) emitLocal("meetings");
-    return { foldedCount: stray.length };
-  },
   "meetings.prepareDecision": async () => {
     await delay(400);
     return {};

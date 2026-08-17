@@ -697,37 +697,6 @@ final class ContextStore: @unchecked Sendable {
         }
     }
 
-    /// One-shot cleanup of accumulated over-splitting: every unnamed voice
-    /// with at most `maxSamples` utterances folds into its acoustically
-    /// nearest named-or-substantial voice, provided the fingerprints are
-    /// close. Backfills calls recorded before end-of-call consolidation
-    /// existed. Returns the number of voices folded away.
-    ///
-    /// The fold bar depends on the fingerprint's vector space (dimension):
-    /// neural 256-dim embeddings separate speakers around 0.7 cosine
-    /// distance; legacy spectral ones around 0.16. Mismatched dimensions are
-    /// infinitely far apart, so legacy and neural profiles never cross-merge.
-    func sweepStrayProfiles(maxSamples: Int = 3) throws -> Int {
-        let profiles = try allSpeakerProfiles()
-        let targets = profiles.filter { $0.isNamed || $0.sampleCount > maxSamples }
-        guard !targets.isEmpty else { return 0 }
-        var merged = 0
-        for stray in profiles where !stray.isNamed && stray.sampleCount <= maxSamples {
-            var best: SpeakerProfile?
-            var bestDist: Float = .greatestFiniteMagnitude
-            for target in targets where target.id != stray.id {
-                let dist = voiceCosineDistance(stray.embedding, target.embedding)
-                if dist < bestDist { bestDist = dist; best = target }
-            }
-            let foldBar: Float = stray.embedding.count >= 100 ? 0.80 : 0.25
-            if let best, bestDist <= foldBar {
-                try mergeSpeaker(stray.id, into: best.id)
-                merged += 1
-            }
-        }
-        return merged
-    }
-
     /// Break ONE call's voice out of a profile it was wrongly matched to —
     /// the inverse of merge. The call's segments move to a brand-new unnamed
     /// "Speaker N" profile (rename it afterwards); the source profile keeps its

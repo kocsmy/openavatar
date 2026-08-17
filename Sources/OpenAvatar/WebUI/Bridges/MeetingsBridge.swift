@@ -27,7 +27,6 @@ final class MeetingsBridge {
         case "meetings.renameSpeaker": return try renameSpeaker(params)
         case "meetings.mergeSpeaker": return try mergeSpeaker(params)
         case "meetings.detachSpeaker": return try detachSpeaker(params)
-        case "meetings.sweepStrayVoices": return sweepStrayVoices()
         case "meetings.prepareDecision": return try prepareDecision(params)
         case "meetings.markDecisionDone": return try markDecisionDone(params)
         case "meetings.dismissDecision": return try dismissDecision(params)
@@ -191,12 +190,6 @@ final class MeetingsBridge {
         _ = app.detachSpeaker(callID: callID, from: speakerID)
         WebEventBus.shared.emit(.meetings)
         return .object([:])
-    }
-
-    private func sweepStrayVoices() -> JSONValue {
-        let folded = app.sweepStrayVoices()
-        if folded > 0 { WebEventBus.shared.emit(.meetings) }
-        return .object(["foldedCount": .number(Double(folded))])
     }
 
     /// The user's own notes, editable from the meeting page rather than only
