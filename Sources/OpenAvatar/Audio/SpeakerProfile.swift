@@ -1,11 +1,12 @@
 import Foundation
 
-/// A persistent voice fingerprint — one per distinct voice ever heard on the
-/// system ("Others") channel. `name` is user-assigned and, once set, carries
-/// the speaker's identity across every past and future call: the diarizer
-/// matches new utterances against these stored fingerprints, so the same voice
-/// gets the same name automatically next time. `ordinal` is a friendly
-/// fallback label ("Speaker 3") until the user names the voice.
+/// One voice on one call. `name` comes from the calendar (the 1:1 shortcut),
+/// a mid-call rename, or the post-call LLM pass — never from acoustic
+/// matching, and never from another call: profiles are per-call records, not
+/// identities the app recognizes people by. `ordinal` is a friendly fallback
+/// label ("Speaker 3") until a name arrives. `embedding` is kept for
+/// reference (the cluster centroid that produced the voice) but nothing
+/// matches against it.
 struct SpeakerProfile: Identifiable, Sendable, Equatable {
     let id: UUID
     var name: String?

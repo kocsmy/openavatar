@@ -3,67 +3,63 @@ import Foundation
 /// The end-of-call speaker pass: re-cluster the whole recording, then rewrite
 /// the call's transcript to match.
 ///
-/// Live labels are a guess made 15 seconds at a time; this is the correction.
-/// It decides how many people were actually on the call (bounded by the
-/// calendar roster when there is one), attaches names only where the evidence
-/// supports it, and deletes the provisional voices the streaming pass invented
-/// along the way — those strays are what used to pile up in the database as
-/// "Speaker 52" and then contaminate later calls.
+/// Voices are strictly PER-CALL. The app used to keep a database of voice
+/// fingerprints and match every call against it — and on far-end call audio
+/// (whatever survives the codec, echo cancellation, and the other side's mic)
+/// that matching cannot be made reliable: with enough named voices on file,
+/// something is always "close enough" to a stranger, which is how a
+/// two-person call once listed six people who were nowhere near it. So no
+/// cluster is ever identified acoustically against stored voices. A name can
+/// reach a voice in exactly three ways: the calendar says the call had one
+/// other person (see the 1:1 shortcut in `finalize`), a human typed it during
+/// the call, or the post-call LLM pass reads it out of the transcript —
+/// roster-gated (MemoryConsolidator). Everything else stays "Speaker N".
 actor CallSpeakerFinalizer {
 
-    /// How close a cluster's centroid must sit to a stored voice before we
-    /// reuse that person's name. Deliberately strict: a false match here is
-    /// the "someone who wasn't on the call" bug, and an unnamed voice the user
-    /// can name in one click is much cheaper than a confidently wrong one.
-    static let identityDistance: Float = 0.35
-
-    /// How much closer the winner must be than the runner-up. A threshold
-    /// alone stops being evidence once the database is crowded: with a dozen
-    /// named voices on file, *something* is always within `identityDistance`
-    /// of any stranger, and "closest on file" then seats whoever happens to be
-    /// nearest. Two voices tied for a cluster means we recognized neither.
-    static let identityMargin: Float = 0.06
-
-    /// A voice earns a permanent fingerprint only after this much speech.
-    /// Below it we still show the voice on the call, but never remember it —
-    /// short fragments make weak centroids, and weak centroids are what
-    /// poisoned matching in the first place.
+    /// A voice earns a fingerprint row only after this much speech. Below it
+    /// we still show the voice on the call, but never keep it — short
+    /// fragments are noise, not people.
     static let minSpeechForNewVoice: TimeInterval = 30
 
     /// Fraction of a cluster's segments that must already agree on a named
-    /// voice before we keep that name without a centroid match.
+    /// voice before we keep that name. The only way a name exists at this
+    /// point is a human having attached it during the call (mid-call rename,
+    /// or the 1:1 prefill) — near-unanimity keeps it from being thrown away.
     static let liveAgreementShare = 0.8
 
     struct Outcome: Sendable, Equatable {
         var voices = 0        // distinct people on the finished call
         var reassigned = 0    // transcript segments whose speaker changed
         var removed = 0       // provisional fingerprints swept away
-        /// The fingerprints this pass stands behind. Only these may absorb the
-        /// call's audio into their centroid (see SpeakerDiarizer.endCall).
-        var identified: Set<UUID> = []
     }
 
     private let store: ContextStore
     private let backend: OfflineDiarizerBackend
 
     init(store: ContextStore = .shared,
-         backend: OfflineDiarizerBackend = FluidOfflineDiarizerBackend()) {
+         backend: OfflineDiarizerBackend = SpeakerKitOfflineDiarizerBackend()) {
         self.store = store
         self.backend = backend
     }
 
-    /// Re-diarize `audioURL` and rewrite the call's speakers. Best-effort: on
-    /// any failure the call simply keeps its streaming labels.
+    /// Rewrite the call's speakers. Best-effort: on any failure the call
+    /// simply keeps its streaming labels.
     ///
-    /// `roster` is the meeting's invitee list, and when we have one it decides
-    /// which stored voices may be recognized at all — see `eligible`.
+    /// `roster` is the meeting's invitee list (the user excluded). With
+    /// exactly one name on it this is a 1:1 call, and the entire system
+    /// channel IS that person — no clustering, no inference, no audio needed.
+    /// Otherwise the recording is re-diarized and voices stay per-call.
     @discardableResult
-    func finalize(callID: UUID, audioURL: URL, maxSpeakers: Int?,
+    func finalize(callID: UUID, audioURL: URL?, maxSpeakers: Int?,
                   roster: [String] = []) async -> Outcome {
         do {
+            if roster.count == 1 {
+                return try assignAll(callID: callID, to: roster[0])
+            }
+            guard let audioURL else { return Outcome() }
             let turns = try await backend.diarize(fileURL: audioURL, maxSpeakers: maxSpeakers)
             guard !turns.isEmpty else { return Outcome() }
-            return try apply(turns: turns, callID: callID, roster: roster)
+            return try apply(turns: turns, callID: callID)
         } catch {
             NSLog("Offline speaker pass failed, keeping live labels: %@",
                   Redactor.redact(error.localizedDescription))
@@ -71,16 +67,58 @@ actor CallSpeakerFinalizer {
         }
     }
 
-    // MARK: Applying the result
+    // MARK: The 1:1 shortcut
 
-    private func apply(turns: [SpeakerTurn], callID: UUID, roster: [String]) throws -> Outcome {
+    /// A two-person meeting is the one case with a deterministic answer: the
+    /// mic channel is the user, so everything on the system channel belongs
+    /// to the single other invitee. Assign it all to one voice wearing their
+    /// name, by construction rather than by inference.
+    private func assignAll(callID: UUID, to name: String) throws -> Outcome {
+        let segments = try store.segments(callID: callID).filter { $0.source == .system }
+        guard !segments.isEmpty else { return Outcome() }
+        let profileID = try callProfile(named: name, segments: segments)
+
+        var outcome = Outcome()
+        outcome.voices = 1
+        var updates: [(segmentID: UUID, speakerID: UUID?, label: String?)] = []
+        for segment in segments where segment.speakerID != profileID.uuidString {
+            updates.append((segment.id, profileID, name))
+            outcome.reassigned += 1
+        }
+        try store.applySpeakerAssignments(callID: callID, updates)
+        outcome.removed = try store.deleteUnreferencedUnnamedProfiles()
+        try store.relabelUnnamedSpeakers(callID: callID)
+        return outcome
+    }
+
+    /// The voice that stands for the call's one remote person: whatever
+    /// profile the live pass already gave that name on THIS call (the 1:1
+    /// prefill, or a rename), else a fresh one. Profiles from other calls are
+    /// deliberately not candidates, even by name — voices are per-call.
+    private func callProfile(named name: String, segments: [TranscriptSegment]) throws -> UUID {
+        let onCall = Set(segments.compactMap { $0.speakerID.flatMap(UUID.init(uuidString:)) })
+        if let existing = try store.allSpeakerProfiles()
+            .first(where: { onCall.contains($0.id) && $0.name == name }) {
+            return existing.id
+        }
+        let now = Date()
+        let profile = SpeakerProfile(id: UUID(), name: name,
+                                     ordinal: (try? store.nextSpeakerOrdinal()) ?? 1,
+                                     embedding: [], sampleCount: segments.count,
+                                     createdAt: now, updatedAt: now)
+        try store.insertSpeakerProfile(profile)
+        return profile.id
+    }
+
+    // MARK: Applying a diarized result
+
+    private func apply(turns: [SpeakerTurn], callID: UUID) throws -> Outcome {
         let segments = try store.segments(callID: callID).filter { $0.source == .system }
         guard !segments.isEmpty else { return Outcome() }
 
         let clusters = Self.clusters(from: turns)
         let placement = Self.place(turns: turns, segments: segments)
         let stored = try store.allSpeakerProfiles()
-        let candidates = Self.eligible(stored, roster: roster)
 
         var resolved: [String: UUID] = [:]      // cluster → fingerprint
         var outcome = Outcome()
@@ -88,14 +126,12 @@ actor CallSpeakerFinalizer {
             let members = segments.filter { placement[$0.id] == cluster.backendSpeakerID }
             guard !members.isEmpty else { continue }
             guard let profileID = try identify(cluster, members: members,
-                                               candidates: candidates,
                                                stored: stored) else { continue }
             resolved[cluster.backendSpeakerID] = profileID
         }
-        // Distinct people, not distinct clusters: two clusters that both match
-        // one stored voice are that person, found twice.
-        outcome.identified = Set(resolved.values)
-        outcome.voices = outcome.identified.count
+        // Distinct people, not distinct clusters: two clusters that both kept
+        // one live-named voice are that person, found twice.
+        outcome.voices = Set(resolved.values).count
 
         // Named voices carry their name onto the row; unnamed ones are left
         // blank here and numbered per call by relabelUnnamedSpeakers below.
@@ -117,21 +153,15 @@ actor CallSpeakerFinalizer {
         return outcome
     }
 
-    /// Which fingerprint a cluster belongs to: an existing voice it matches
-    /// acoustically, the name the live pass already agreed on, a fresh
-    /// fingerprint if it spoke enough to be worth remembering — or nothing.
+    /// Which fingerprint a cluster belongs to: the name a human attached
+    /// during the call (carried by the live labels), a fresh per-call voice
+    /// if it spoke enough to be worth keeping — or nothing. Never an acoustic
+    /// match against stored voices; that is the recognition this pass no
+    /// longer performs.
     private func identify(_ cluster: VoiceCluster, members: [TranscriptSegment],
-                          candidates: [SpeakerProfile],
                           stored: [SpeakerProfile]) throws -> UUID? {
-        if let match = Self.nearestNamed(to: cluster.centroid, among: candidates) { return match }
-        // Live consensus deliberately sees every stored voice, not just the
-        // roster. Enrollment is roster-narrowed too (SpeakerDiarizer), so the
-        // only way this call's segments can already carry an off-roster name
-        // is the user having typed it mid-call — which must survive the pass.
         if let agreed = Self.liveConsensus(members, stored: stored) { return agreed }
-        // A fingerprint with no vector behind it could never be matched again,
-        // so it would only ever be clutter.
-        guard cluster.speech >= Self.minSpeechForNewVoice, !cluster.centroid.isEmpty else { return nil }
+        guard cluster.speech >= Self.minSpeechForNewVoice else { return nil }
         let now = Date()
         let profile = SpeakerProfile(id: UUID(), name: nil,
                                      ordinal: (try? store.nextSpeakerOrdinal()) ?? 1,
@@ -201,55 +231,9 @@ actor CallSpeakerFinalizer {
         return out
     }
 
-    /// The named voices this call is allowed to recognize.
-    ///
-    /// With a calendar roster that is exactly the people invited. The database
-    /// accumulates every voice the user has ever named, and any of them can
-    /// sit within the matching threshold of a stranger — which is how a
-    /// two-person call ends up listing six people who were nowhere near it.
-    /// The roster turns matching from "who does this sound like, out of
-    /// everyone I know" into "which of the people invited is this", and a
-    /// voice that matches nobody invited simply stays "Speaker N" for the user
-    /// to name. Without a roster every named voice stays eligible and the
-    /// runner-up margin in `nearestNamed` does the guarding instead.
-    static func eligible(_ stored: [SpeakerProfile], roster: [String]) -> [SpeakerProfile] {
-        guard !roster.isEmpty else { return stored }
-        return stored.filter { $0.isNamed && Self.names($0.name ?? "", matchAnyOf: roster) }
-    }
-
-    /// Whether a stored voice's name refers to somebody on the roster. People
-    /// are called by their first name on a call and invited by their full one,
-    /// so "Vasilis" and "Vasilis Andreou" have to count as the same person —
-    /// hence a shared name word in either direction rather than equality.
-    static func names(_ name: String, matchAnyOf roster: [String]) -> Bool {
-        let words = Set(name.lowercased().split(separator: " "))
-        guard !words.isEmpty else { return false }
-        return roster.contains { !words.isDisjoint(with: Set($0.lowercased().split(separator: " "))) }
-    }
-
-    /// The closest NAMED stored voice within the identity threshold, when it
-    /// is clearly closer than the next one. Unnamed fingerprints are
-    /// deliberately not candidates — matching a cluster to last week's
-    /// "Speaker 12" gains nothing and spreads its errors.
-    static func nearestNamed(to centroid: [Float], among stored: [SpeakerProfile]) -> UUID? {
-        guard !centroid.isEmpty else { return nil }
-        var ranked: [(id: UUID, distance: Float)] = []
-        for profile in stored where profile.isNamed {
-            let distance = voiceCosineDistance(centroid, profile.embedding)
-            guard distance <= identityDistance else { continue }
-            ranked.append((profile.id, distance))
-        }
-        ranked.sort { $0.distance < $1.distance }
-        guard let best = ranked.first else { return nil }
-        // A near-tie is the database being crowded, not a recognition.
-        if ranked.count > 1, ranked[1].distance - best.distance < identityMargin { return nil }
-        return best.id
-    }
-
     /// What the live pass called this cluster, if it was near-unanimous about
-    /// a named voice. Keeps a correct in-call identification (or a name the
-    /// user typed mid-call) from being thrown away when the offline centroid
-    /// lands just outside the matching threshold.
+    /// a named voice. Names only exist live when a human attached one during
+    /// the call — this keeps that from being thrown away by the re-cluster.
     static func liveConsensus(_ members: [TranscriptSegment],
                               stored: [SpeakerProfile]) -> UUID? {
         guard !members.isEmpty else { return nil }

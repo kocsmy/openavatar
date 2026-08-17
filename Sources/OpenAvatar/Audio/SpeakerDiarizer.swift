@@ -17,29 +17,23 @@ struct SpeakerTurn: Sendable, Equatable {
     let end: TimeInterval
 }
 
-/// The diarization engine behind SpeakerDiarizer. Production uses
-/// FluidAudio's complete pipeline (pyannote-style segmentation + WeSpeaker
-/// embeddings + clustering with a running speaker database); tests inject a
-/// scripted fake.
+/// The engine behind the LIVE diarization pass. Production uses FluidAudio's
+/// streaming pipeline (pyannote-style segmentation + WeSpeaker embeddings +
+/// clustering with a running per-call speaker map); tests inject a scripted
+/// fake. Deliberately per-call: the backend starts every call empty and is
+/// never seeded with stored voices — recognition against the database is the
+/// feature that kept putting absent people on calls, and it is gone.
 protocol DiarizerBackend {
     var isReady: Bool { get }
     func prepare() async throws
-    /// Seed the backend's speaker database with stored fingerprints, so a
-    /// returning voice is assigned its existing id instead of a fresh one.
-    func enroll(_ known: [(id: String, name: String?, embedding: [Float])])
     /// Full diarization of one audio window; `time` is the window's absolute
     /// call-relative start, so returned turns are on the call clock.
     func diarize(_ samples: [Float], at time: TimeInterval) throws -> [SpeakerTurn]
-    /// The backend's evolved centroid per speaker id, read at call end.
-    func finalEmbeddings() -> [String: [Float]]
 }
 
-/// FluidAudio's complete diarization pipeline. This replaced our homegrown
-/// per-utterance nearest-neighbor matching, which embedded whole transcriber
-/// utterances — with Parakeet that's a full 15s chunk, often two speakers
-/// blended into one garbage embedding. The real pipeline finds acoustic
-/// speaker turns inside the audio first, and its SpeakerManager keeps ids
-/// consistent across sequential windows.
+/// FluidAudio's streaming diarization pipeline. Finds acoustic speaker turns
+/// inside each audio window; its SpeakerManager keeps ids consistent across
+/// sequential windows of the same call.
 final class FluidDiarizerBackend: DiarizerBackend {
     private var manager: DiarizerManager?
 
@@ -53,14 +47,6 @@ final class FluidDiarizerBackend: DiarizerBackend {
         manager = m
     }
 
-    func enroll(_ known: [(id: String, name: String?, embedding: [Float])]) {
-        guard let manager, !known.isEmpty else { return }
-        manager.initializeKnownSpeakers(known.map {
-            Speaker(id: $0.id, name: $0.name ?? $0.id, currentEmbedding: $0.embedding,
-                    duration: 60, isPermanent: true)
-        })
-    }
-
     func diarize(_ samples: [Float], at time: TimeInterval) throws -> [SpeakerTurn] {
         guard let manager else { throw AppError.notConfigured("Diarization models not loaded") }
         return try manager.performCompleteDiarization(samples, atTime: time).segments.map {
@@ -69,39 +55,33 @@ final class FluidDiarizerBackend: DiarizerBackend {
                         end: TimeInterval($0.endTimeSeconds))
         }
     }
-
-    func finalEmbeddings() -> [String: [Float]] {
-        manager?.speakerManager.getAllSpeakers().mapValues(\.currentEmbedding) ?? [:]
-    }
 }
 
-/// On-device per-voice diarization for the system-audio ("Others") channel.
+/// On-device per-voice diarization for the system-audio ("Others") channel,
+/// live during the call.
 ///
 /// Each audio chunk is diarized into timed speaker turns (see
 /// DiarizerBackend); transcript segments then take the speaker who did most
-/// of the talking in their time range (SpeakerTimeline). Stored fingerprints
-/// are enrolled into the backend at call start, so a named voice keeps its
-/// name across calls; voices the backend discovers mid-call get persistent
-/// "Speaker N" profiles the user can rename. The mic channel is always "You"
-/// and never diarized.
+/// of the talking in their time range (SpeakerTimeline). Every voice is a
+/// fresh per-call "Speaker N" the user can rename; nothing is matched against
+/// voices from earlier calls. The labels here are provisional — the
+/// end-of-call pass (CallSpeakerFinalizer) re-clusters the whole recording
+/// and rewrites them. The mic channel is always "You" and never diarized.
 actor SpeakerDiarizer {
     private let store: ContextStore
     private let backendFactory: @Sendable () -> DiarizerBackend
     private lazy var backend: DiarizerBackend = backendFactory()
 
-    /// Known voice fingerprints, loaded from the store.
+    /// Voice fingerprints, loaded from the store (for name lookups after a
+    /// rename — never for acoustic matching).
     private var profiles: [SpeakerProfile] = []
     private var loaded = false
 
     // Per-call working state (cleared by beginCall).
     private var backendToProfile: [String: UUID] = [:]
     private var timeline = SpeakerTimeline()
-    private var labeledCounts: [UUID: Int] = [:]
-    private var enrolled = false
     /// "Speaker N" numbering scoped to this call, in first-heard order.
     private var callOrdinals: [UUID: Int] = [:]
-    /// Who the calendar says is on this call, when it says anything.
-    private var roster: [String] = []
 
     init(store: ContextStore = .shared,
          backendFactory: @escaping @Sendable () -> DiarizerBackend = { FluidDiarizerBackend() }) {
@@ -109,67 +89,24 @@ actor SpeakerDiarizer {
         self.backendFactory = backendFactory
     }
 
-    /// Start of a call: reload persisted fingerprints, clear the previous
-    /// call's state, and warm up + enroll in the background (first-ever call
-    /// downloads models; until ready, segments stay "Others" rather than
-    /// blocking transcription).
+    /// Start of a call: clear the previous call's state and warm up in the
+    /// background (first-ever call downloads models; until ready, segments
+    /// stay "Others" rather than blocking transcription).
     func beginCall() {
         reset()
         backendToProfile = [:]
         timeline = SpeakerTimeline()
-        labeledCounts = [:]
         callOrdinals = [:]
-        enrolled = false
-        roster = []
         Task { await prepareBackend() }
-    }
-
-    /// Tell the diarizer who was invited. The calendar answers a moment after
-    /// the call starts, so this usually lands before the models finish loading
-    /// and simply narrows the enrollment below; if enrollment already
-    /// happened against the whole database, it is redone on the next chunk.
-    func setRoster(_ names: [String]) {
-        let incoming = names.filter { !$0.isEmpty }
-        guard incoming != roster else { return }
-        roster = incoming
-        enrolled = false
     }
 
     private func prepareBackend() async {
         do {
             try await backend.prepare()
-            enrollStoredProfiles()
         } catch {
             NSLog("Voice fingerprinting models unavailable: %@",
                   Redactor.redact(error.localizedDescription))
         }
-    }
-
-    /// Seed the backend with every NAMED same-space (neural, 256-dim)
-    /// fingerprint. Legacy spectral profiles can't be enrolled — their names
-    /// still attach via manual rename or the name guesser.
-    ///
-    /// Unnamed voices are deliberately left out. Enrolling every fingerprint
-    /// the app had ever heard meant dozens of competing centroids, many built
-    /// from a second or two of speech, each able to claim a stranger's voice —
-    /// that is how people who were never on a call ended up in its transcript.
-    /// An unnamed match also buys nothing: the end-of-call pass regroups the
-    /// call from scratch anyway.
-    ///
-    /// Named voices have the same problem once there are enough of them:
-    /// every person the user has ever named arrives as a permanent centroid
-    /// competing for each turn, and on a two-person call one voice gets
-    /// scattered across half a dozen of them. When the calendar knows who was
-    /// invited, only those voices are enrolled.
-    private func enrollStoredProfiles() {
-        guard !enrolled, backend.isReady else { return }
-        var known = profiles.filter { $0.embedding.count >= 100 && $0.isNamed }
-        if !roster.isEmpty {
-            known = known.filter { CallSpeakerFinalizer.names($0.name ?? "", matchAnyOf: roster) }
-        }
-        backend.enroll(known.map { ($0.id.uuidString, $0.name, $0.embedding) })
-        for p in known { backendToProfile[p.id.uuidString] = p.id }
-        enrolled = true
     }
 
     /// Reload persisted fingerprints (after a rename/merge/detach) WITHOUT
@@ -184,7 +121,6 @@ actor SpeakerDiarizer {
     func ingest(chunk: AudioChunk) {
         guard chunk.source == .system, backend.isReady else { return }
         if !loaded { reset() }
-        enrollStoredProfiles()   // models may have become ready mid-call
         let samples = ParakeetTranscriber.floatSamples(fromPCM: chunk.pcm)
         guard samples.count >= 16_000 else { return }   // <1s: nothing to segment
         guard let turns = try? backend.diarize(samples, at: chunk.t0) else { return }
@@ -195,8 +131,8 @@ actor SpeakerDiarizer {
         timeline.trim(before: chunk.t0 - 120)
     }
 
-    /// A backend speaker id either maps to an existing profile (enrolled, or
-    /// already seen this call) or mints a persistent "Speaker N" fingerprint.
+    /// A backend speaker id either maps to a voice already seen this call or
+    /// mints a fresh "Speaker N" fingerprint for it.
     private func resolveProfile(for turn: SpeakerTurn) -> UUID {
         if let mapped = backendToProfile[turn.backendSpeakerID] { return mapped }
         let ordinal = (try? store.nextSpeakerOrdinal()) ?? (profiles.count + 1)
@@ -217,7 +153,6 @@ actor SpeakerDiarizer {
         if !loaded { reset() }
         guard let speakerID = timeline.speaker(overlapping: segment.t0, segment.t1),
               let profile = profiles.first(where: { $0.id == speakerID }) else { return nil }
-        labeledCounts[speakerID, default: 0] += 1
         return DiarizedSpeaker(id: profile.id, label: callLabel(for: profile))
     }
 
@@ -230,32 +165,6 @@ actor SpeakerDiarizer {
         let next = callOrdinals.count + 1
         callOrdinals[profile.id] = next
         return "Speaker \(next)"
-    }
-
-    /// End of call: persist the backend's evolved voice centroids and the
-    /// utterance counts, so the next call's enrollment matches better.
-    ///
-    /// `confirmed` is what the end-of-call pass stands behind. A named voice
-    /// absorbs this call's audio only if it is in there, because a wrong match
-    /// otherwise compounds: fold a stranger's speech into somebody's
-    /// fingerprint and the centroid drifts toward the stranger, matching them
-    /// even better next time. Voices this call discovered for itself are
-    /// always written back — there is nobody else's identity to damage.
-    func endCall(confirmed: Set<UUID> = []) {
-        for (backendID, embedding) in backend.finalEmbeddings() {
-            guard let profileID = backendToProfile[backendID],
-                  let index = profiles.firstIndex(where: { $0.id == profileID }),
-                  !embedding.isEmpty else { continue }
-            var p = profiles[index]
-            if p.isNamed, !confirmed.contains(p.id) { continue }
-            guard p.embedding.count == embedding.count else { continue }   // never cross spaces
-            p.embedding = embedding
-            p.sampleCount += max(1, labeledCounts[profileID, default: 0])
-            p.updatedAt = Date()
-            profiles[index] = p
-            try? store.updateSpeakerEmbedding(id: p.id, embedding: p.embedding,
-                                              sampleCount: p.sampleCount)
-        }
     }
 
     var speakerCount: Int { profiles.count }

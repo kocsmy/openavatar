@@ -91,7 +91,6 @@ export interface MeetingsAPI {
   "meetings.renameSpeaker": [{ speakerID: string; name: string | null }, Record<string, never>];
   "meetings.mergeSpeaker": [{ sourceID: string; targetID: string }, Record<string, never>];
   "meetings.detachSpeaker": [{ callID: string; speakerID: string }, Record<string, never>];
-  "meetings.sweepStrayVoices": [Record<string, never>, { foldedCount: number }];
   "meetings.prepareDecision": [{ callID: string; decisionID: string }, Record<string, never>];
   "meetings.markDecisionDone": [{ callID: string; decisionID: string }, Record<string, never>];
   "meetings.dismissDecision": [

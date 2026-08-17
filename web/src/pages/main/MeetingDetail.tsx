@@ -31,7 +31,6 @@ import {
   ListChecks,
   Loader2,
   MoreHorizontal,
-  Sparkles,
   Trash2,
   XCircle,
 } from "lucide-react";
@@ -602,23 +601,6 @@ export function MeetingDetailPane({ callID, onDeleted }: { callID: string; onDel
                     }}
                   >
                     <ClipboardCopy className="size-3.5" /> Copy transcript
-                  </MenuItem>
-                  <div className="my-1 h-px bg-border" />
-                  <MenuItem
-                    disabled={detail.isListening}
-                    onClick={() => {
-                      void bridge("meetings.sweepStrayVoices", {}).then((r) => {
-                        setMessage(
-                          r.foldedCount > 0
-                            ? `Folded ${r.foldedCount} stray voice${r.foldedCount === 1 ? "" : "s"} away.`
-                            : "No stray voices close enough to fold.",
-                        );
-                        void load();
-                      });
-                      close();
-                    }}
-                  >
-                    <Sparkles className="size-3.5" /> Tidy up stray voices
                   </MenuItem>
                   <div className="my-1 h-px bg-border" />
                   <MenuItem

@@ -3,15 +3,19 @@ import XCTest
 
 /// The end-of-call speaker pass. Streaming diarization decides who is talking
 /// from a 15-second window and gets it wrong by SPLITTING people — a four-way
-/// call arriving as ten "speakers", some of them named after people who were
-/// only mentioned. This pass re-clusters the finished recording and is the
-/// thing that has to collapse those back down, so the collapse is pinned here.
+/// call arriving as ten "speakers". This pass re-clusters the finished
+/// recording and collapses those back down. Just as load-bearing is what it
+/// must NOT do: recognize a cluster acoustically against voices stored from
+/// earlier calls — that recognition is how a two-person call once listed six
+/// people who were nowhere near it, and it is gone.
 final class FakeOfflineDiarizerBackend: OfflineDiarizerBackend, @unchecked Sendable {
     var turns: [SpeakerTurn] = []
     var error: Error?
     private(set) var requestedMaxSpeakers: Int?
+    private(set) var diarizeCalls = 0
 
     func diarize(fileURL: URL, maxSpeakers: Int?) async throws -> [SpeakerTurn] {
+        diarizeCalls += 1
         requestedMaxSpeakers = maxSpeakers
         if let error { throw error }
         return turns
@@ -42,10 +46,10 @@ final class CallSpeakerFinalizerTests: XCTestCase {
         return profile.id
     }
 
-    // MARK: The regression this whole pass exists for
+    // MARK: Collapsing over-splits
 
     /// Six fragments of two people collapse to two voices, and the strays are
-    /// deleted rather than left to be enrolled into the next call.
+    /// deleted rather than left to clutter the database.
     func testOverSplitCallCollapsesToTheVoicesActuallyPresent() async throws {
         let store = try ContextStore(inMemory: true)
         let callID = try store.startCall(app: "Google Meet")
@@ -74,15 +78,15 @@ final class CallSpeakerFinalizerTests: XCTestCase {
         let voices = try store.speakerProfiles(callID: callID)
         XCTAssertEqual(voices.count, 2)
         XCTAssertEqual(try store.allSpeakerProfiles().count, 2,
-                       "strays must not survive to be enrolled into the next call")
+                       "strays must not survive the call")
 
         // Numbering restarts per call — never "Speaker 31" on a two-way call.
         let labels = Set((try store.segments(callID: callID)).compactMap(\.speaker))
         XCTAssertEqual(labels, ["Speaker 1", "Speaker 2"])
     }
 
-    /// The calendar roster reaches the clusterer as a ceiling on how many
-    /// people it may find.
+    /// The calendar roster reaches the clusterer as a cap on how many people
+    /// it may find.
     func testRosterCeilingIsForwardedToTheBackend() async throws {
         let store = try ContextStore(inMemory: true)
         let callID = try store.startCall(app: "Zoom")
@@ -116,8 +120,24 @@ final class CallSpeakerFinalizerTests: XCTestCase {
         XCTAssertEqual(try store.allSpeakerProfiles().count, 1)
     }
 
+    /// No recording (audio buffering failed, or diarization came up empty)
+    /// on a multi-party call → nothing changes.
+    func testMissingAudioLeavesTheTranscriptAlone() async throws {
+        let store = try ContextStore(inMemory: true)
+        let callID = try store.startCall(app: "Zoom")
+        try store.insert([segment(0, 30, speaker: "Speaker 1")], callID: callID)
+
+        let backend = FakeOfflineDiarizerBackend()
+        let finalizer = CallSpeakerFinalizer(store: store, backend: backend)
+        let outcome = await finalizer.finalize(callID: callID, audioURL: nil, maxSpeakers: nil)
+
+        XCTAssertEqual(outcome, CallSpeakerFinalizer.Outcome())
+        XCTAssertEqual(backend.diarizeCalls, 0)
+        XCTAssertEqual(try store.segments(callID: callID).first?.speaker, "Speaker 1")
+    }
+
     /// A voice that barely spoke is shown but never remembered — thin
-    /// centroids are what made matching unreliable in the first place.
+    /// centroids are noise, not people.
     func testBriefVoiceNeverEarnsAFingerprint() async throws {
         let store = try ContextStore(inMemory: true)
         let callID = try store.startCall(app: "Zoom")
@@ -135,98 +155,144 @@ final class CallSpeakerFinalizerTests: XCTestCase {
         XCTAssertNil(brief?.speakerID, "an unattributable span reads as Others")
     }
 
-    /// A stored NAMED voice is recognized by centroid and keeps its name.
-    func testNamedVoiceIsRecognizedByItsFingerprint() async throws {
+    // MARK: No cross-call recognition — the core invariant
+
+    /// THE invariant this design rests on: a voice stored and named on an
+    /// earlier call is never matched acoustically, even when the fingerprints
+    /// are identical. Far-end call audio cannot support that matching — with
+    /// enough named voices on file, something is always "close enough" to a
+    /// stranger, which is how a two-person call once listed six absent people.
+    func testStoredVoicesAreNeverRecognizedAcoustically() async throws {
         let store = try ContextStore(inMemory: true)
         let now = Date()
-        let alice = SpeakerProfile(id: UUID(), name: "Alice", ordinal: 1,
-                                   embedding: [Float](repeating: 0.1, count: 256),
-                                   sampleCount: 20, createdAt: now, updatedAt: now)
-        try store.insertSpeakerProfile(alice)
-        let callID = try store.startCall(app: "Zoom")
+        let shared = [Float](repeating: 0.1, count: 256)
+        for name in ["Conrad", "Vasilis", "Paul", "Tiago", "Ben", "Claire"] {
+            try store.insertSpeakerProfile(SpeakerProfile(
+                id: UUID(), name: name, ordinal: 1, embedding: shared,
+                sampleCount: 30, createdAt: now, updatedAt: now))
+        }
+        let callID = try store.startCall(app: "Google Meet")
         try store.insert([segment(0, 40)], callID: callID)
 
         let backend = FakeOfflineDiarizerBackend()
-        backend.turns = [turn("A", 0, 40, value: 0.1)]
+        backend.turns = [turn("A", 0, 40, value: 0.1)]   // identical to all six
+        let finalizer = CallSpeakerFinalizer(store: store, backend: backend)
+        let outcome = await finalizer.finalize(callID: callID,
+                                               audioURL: URL(fileURLWithPath: "/tmp/x.wav"),
+                                               maxSpeakers: nil)
+
+        XCTAssertEqual(outcome.voices, 1)
+        let seg = try XCTUnwrap(store.segments(callID: callID).first)
+        XCTAssertEqual(seg.speaker, "Speaker 1",
+                       "a perfect acoustic match must still not borrow a stored name")
+    }
+
+    /// A name typed DURING the call (mid-call rename, 1:1 prefill) is the one
+    /// kind of name the pass keeps — it came from a human, not from matching.
+    func testMidCallRenameSurvivesThePass() async throws {
+        let store = try ContextStore(inMemory: true)
+        let callID = try store.startCall(app: "Zoom")
+        let voice = try provisional(store, ordinal: 1)
+        try store.renameSpeaker(id: voice, to: "Bea")
+        let segments = (0..<5).map { i in
+            segment(Double(i) * 10, Double(i) * 10 + 9,
+                    speaker: "Bea", speakerID: voice.uuidString)
+        }
+        try store.insert(segments, callID: callID)
+
+        let backend = FakeOfflineDiarizerBackend()
+        backend.turns = (0..<5).map { i in turn("A", Double(i) * 10, Double(i) * 10 + 9) }
         let finalizer = CallSpeakerFinalizer(store: store, backend: backend)
         _ = await finalizer.finalize(callID: callID,
                                      audioURL: URL(fileURLWithPath: "/tmp/x.wav"),
                                      maxSpeakers: nil)
 
         let seg = try XCTUnwrap(store.segments(callID: callID).first)
-        XCTAssertEqual(seg.speakerID, alice.id.uuidString)
-        XCTAssertEqual(seg.speaker, "Alice")
-        XCTAssertEqual(try store.allSpeakerProfiles().count, 1)
+        XCTAssertEqual(seg.speakerID, voice.uuidString)
+        XCTAssertEqual(seg.speaker, "Bea")
+        XCTAssertEqual(try store.allSpeakerProfiles().count, 1, "no duplicate voice minted")
     }
 
-    /// The bug this gate exists for: a two-person call listing six people,
-    /// every one of them a voice named on an EARLIER call. The database grows
-    /// a name at a time, and "closest voice on file" eventually finds somebody
-    /// for everybody. Only the people invited may be recognized.
-    func testOnlyInvitedVoicesCanBeRecognized() async throws {
+    // MARK: The 1:1 shortcut
+
+    /// A meeting with exactly one other invitee has a deterministic answer:
+    /// the whole system channel IS that person. No clustering, no audio, no
+    /// inference — and stray live voices are swept.
+    func testOneOnOneCallBelongsToTheInvitee() async throws {
         let store = try ContextStore(inMemory: true)
-        let now = Date()
-        let shared = [Float](repeating: 0.1, count: 256)   // all equally "matching"
-        var byName: [String: UUID] = [:]
-        for name in ["Joao", "Conrad", "Vasilis", "Paul", "Tiago", "Ben", "Claire"] {
-            let profile = SpeakerProfile(id: UUID(), name: name, ordinal: byName.count + 1,
-                                         embedding: shared, sampleCount: 30,
-                                         createdAt: now, updatedAt: now)
-            try store.insertSpeakerProfile(profile)
-            byName[name] = profile.id
-        }
         let callID = try store.startCall(app: "Google Meet")
-        try store.insert([segment(0, 40)], callID: callID)
+        var strays: [UUID] = []
+        for ordinal in 1...3 { strays.append(try provisional(store, ordinal: ordinal)) }
+        let segments = (0..<3).map { i in
+            segment(Double(i) * 20, Double(i) * 20 + 18,
+                    speaker: "Speaker \(i + 1)", speakerID: strays[i].uuidString)
+        }
+        try store.insert(segments, callID: callID)
 
         let backend = FakeOfflineDiarizerBackend()
-        backend.turns = [turn("A", 0, 40, value: 0.1)]
         let finalizer = CallSpeakerFinalizer(store: store, backend: backend)
-        let outcome = await finalizer.finalize(callID: callID,
-                                               audioURL: URL(fileURLWithPath: "/tmp/x.wav"),
-                                               maxSpeakers: 2, roster: ["Joao Ferreira"])
+        let outcome = await finalizer.finalize(callID: callID, audioURL: nil,
+                                               maxSpeakers: 2, roster: ["João Ferreira"])
 
         XCTAssertEqual(outcome.voices, 1)
+        XCTAssertEqual(backend.diarizeCalls, 0, "a 1:1 call needs no clustering at all")
+        let stored = try store.segments(callID: callID)
+        XCTAssertEqual(Set(stored.compactMap(\.speaker)), ["João Ferreira"])
+        XCTAssertEqual(try store.allSpeakerProfiles().count, 1)
+        XCTAssertEqual(try store.allSpeakerProfiles().first?.name, "João Ferreira")
+    }
+
+    /// When the live prefill already named this call's voice after the one
+    /// invitee, the shortcut keeps that profile instead of minting another.
+    func testOneOnOneKeepsTheLiveNamedProfile() async throws {
+        let store = try ContextStore(inMemory: true)
+        let callID = try store.startCall(app: "Zoom")
+        let voice = try provisional(store, ordinal: 1)
+        try store.renameSpeaker(id: voice, to: "João Ferreira")
+        try store.insert([segment(0, 30, speaker: "João Ferreira", speakerID: voice.uuidString),
+                          segment(31, 60)], callID: callID)
+
+        let finalizer = CallSpeakerFinalizer(store: store,
+                                             backend: FakeOfflineDiarizerBackend())
+        let outcome = await finalizer.finalize(callID: callID, audioURL: nil,
+                                               maxSpeakers: 2, roster: ["João Ferreira"])
+
+        XCTAssertEqual(outcome.voices, 1)
+        XCTAssertEqual(try store.allSpeakerProfiles().count, 1)
+        let stored = try store.segments(callID: callID)
+        XCTAssertEqual(stored.compactMap(\.speakerID), [voice.uuidString, voice.uuidString],
+                       "both spans, including the unattributed one, belong to the invitee")
+    }
+
+    /// A profile named like the invitee on an EARLIER call is not reused —
+    /// voices are per-call, even when the names coincide.
+    func testOneOnOneNeverReusesAnotherCallsProfile() async throws {
+        let store = try ContextStore(inMemory: true)
+        let now = Date()
+        let old = SpeakerProfile(id: UUID(), name: "João Ferreira", ordinal: 1,
+                                 embedding: [Float](repeating: 0.2, count: 256),
+                                 sampleCount: 40, createdAt: now, updatedAt: now)
+        try store.insertSpeakerProfile(old)
+        // Reference the old profile from an old call so it survives sweeping.
+        let oldCall = try store.startCall(app: "Zoom")
+        try store.insert([segment(0, 10, speaker: "João Ferreira",
+                                  speakerID: old.id.uuidString)], callID: oldCall)
+
+        let callID = try store.startCall(app: "Zoom")
+        try store.insert([segment(0, 30)], callID: callID)
+
+        let finalizer = CallSpeakerFinalizer(store: store,
+                                             backend: FakeOfflineDiarizerBackend())
+        _ = await finalizer.finalize(callID: callID, audioURL: nil,
+                                     maxSpeakers: 2, roster: ["João Ferreira"])
+
         let seg = try XCTUnwrap(store.segments(callID: callID).first)
-        XCTAssertEqual(seg.speakerID, byName["Joao"]?.uuidString)
-        XCTAssertEqual(seg.speaker, "Joao")
+        XCTAssertNotEqual(seg.speakerID, old.id.uuidString,
+                          "same name, different call — a fresh voice, not a link")
+        XCTAssertEqual(seg.speaker, "João Ferreira")
     }
 
     // MARK: Pure helpers
-
-    /// With no roster to check against, a crowded database must not hand out a
-    /// name on a coin flip: two voices equally close is a recognition of
-    /// neither, and "Speaker 1" is one click from being right.
-    func testTiedStoredVoicesAreNotARecognition() {
-        let now = Date()
-        let shared = [Float](repeating: 0.1, count: 256)
-        let ben = SpeakerProfile(id: UUID(), name: "Ben", ordinal: 1, embedding: shared,
-                                 sampleCount: 30, createdAt: now, updatedAt: now)
-        let claire = SpeakerProfile(id: UUID(), name: "Claire", ordinal: 2, embedding: shared,
-                                    sampleCount: 30, createdAt: now, updatedAt: now)
-        XCTAssertNil(CallSpeakerFinalizer.nearestNamed(to: shared, among: [ben, claire]))
-        XCTAssertEqual(CallSpeakerFinalizer.nearestNamed(to: shared, among: [ben]), ben.id)
-    }
-
-    func testRosterMatchingWorksInBothDirections() {
-        XCTAssertTrue(CallSpeakerFinalizer.names("Vasilis", matchAnyOf: ["Vasilis Andreou"]))
-        XCTAssertTrue(CallSpeakerFinalizer.names("Vasilis Andreou", matchAnyOf: ["Vasilis"]))
-        XCTAssertFalse(CallSpeakerFinalizer.names("Conrad", matchAnyOf: ["Vasilis Andreou"]))
-        XCTAssertFalse(CallSpeakerFinalizer.names("", matchAnyOf: ["Vasilis"]))
-    }
-
-    /// No calendar, no roster — every named voice stays eligible, and the
-    /// margin above is what guards the match instead.
-    func testWithoutARosterEveryVoiceStaysEligible() {
-        let now = Date()
-        let embedding = [Float](repeating: 0.1, count: 256)
-        let named = SpeakerProfile(id: UUID(), name: "Ben", ordinal: 1, embedding: embedding,
-                                   sampleCount: 5, createdAt: now, updatedAt: now)
-        let unnamed = SpeakerProfile(id: UUID(), name: nil, ordinal: 2, embedding: embedding,
-                                     sampleCount: 5, createdAt: now, updatedAt: now)
-        XCTAssertEqual(CallSpeakerFinalizer.eligible([named, unnamed], roster: []).count, 2)
-        XCTAssertEqual(CallSpeakerFinalizer.eligible([named, unnamed], roster: ["Ben"]).map(\.id),
-                       [named.id])
-    }
 
     func testClustersAreDurationWeighted() {
         let clusters = CallSpeakerFinalizer.clusters(from: [
@@ -243,25 +309,6 @@ final class CallSpeakerFinalizerTests: XCTestCase {
             turns: [turn("A", 0, 10), turn("B", 10, 20)], segments: [a, b])
         XCTAssertEqual(placed[a.id], "A")
         XCTAssertEqual(placed[b.id], "B")
-    }
-
-    func testOnlyNamedProfilesAreMatchCandidates() {
-        let now = Date()
-        let embedding = [Float](repeating: 0.1, count: 256)
-        let unnamed = SpeakerProfile(id: UUID(), name: nil, ordinal: 1, embedding: embedding,
-                                     sampleCount: 3, createdAt: now, updatedAt: now)
-        XCTAssertNil(CallSpeakerFinalizer.nearestNamed(to: embedding, among: [unnamed]),
-                     "matching last week's Speaker 12 spreads its mistakes")
-
-        let named = SpeakerProfile(id: UUID(), name: "Bea", ordinal: 2, embedding: embedding,
-                                   sampleCount: 30, createdAt: now, updatedAt: now)
-        XCTAssertEqual(CallSpeakerFinalizer.nearestNamed(to: embedding, among: [named]), named.id)
-
-        // A different voice stays unmatched rather than borrowing her name.
-        let far = [Float](repeating: 0, count: 256).enumerated().map { i, _ in
-            i.isMultiple(of: 2) ? Float(1) : Float(-1)
-        }
-        XCTAssertNil(CallSpeakerFinalizer.nearestNamed(to: far, among: [named]))
     }
 
     func testLiveConsensusNeedsNearUnanimity() {

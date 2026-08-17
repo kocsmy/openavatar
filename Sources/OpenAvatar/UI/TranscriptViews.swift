@@ -494,15 +494,6 @@ struct MeetingDetailView: View {
                     Button("Copy transcript") { copyTranscript() }
                         .disabled(segments.isEmpty)
                     Divider()
-                    Button("Tidy up stray voices") {
-                        let folded = app.sweepStrayVoices()
-                        message = folded > 0
-                            ? "Folded \(folded) stray voice\(folded == 1 ? "" : "s") away."
-                            : "No stray voices close enough to fold."
-                        reload()
-                    }
-                    .disabled(app.isListening)
-                    Divider()
                     Button("Delete meeting…", role: .destructive) {
                         confirmingDelete = true
                     }

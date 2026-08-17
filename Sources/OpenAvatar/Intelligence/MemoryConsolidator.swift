@@ -72,7 +72,11 @@ actor MemoryConsolidator {
         }
 
         // Still-unnamed diarized voices, mapped label → profile id, so a
-        // confident in-transcript introduction can name them.
+        // confident in-transcript introduction can name them. Keyed by the
+        // label the transcript ACTUALLY shows (per-call "Speaker 1", set by
+        // relabelUnnamedSpeakers) — the profile's own displayLabel carries the
+        // database ordinal, and asking the LLM about "Speaker 31" when the
+        // transcript says "Speaker 1" made every answer miss.
         var unnamedByLabel: [String: UUID] = [:]
         if guessSpeakerNames {
             let profiles = (try? store.allSpeakerProfiles()) ?? []
@@ -80,7 +84,7 @@ actor MemoryConsolidator {
                 guard let sid = segment.speakerID, let id = UUID(uuidString: sid),
                       let profile = profiles.first(where: { $0.id == id }),
                       !profile.isNamed else { continue }
-                unnamedByLabel[profile.displayLabel] = id
+                unnamedByLabel[segment.speaker ?? profile.displayLabel] = id
             }
         }
 
